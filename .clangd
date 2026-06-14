@@ -1,0 +1,11 @@
+CompileFlags:
+  CompilationDatabase: "build"
+  Add: [-w, -ferror-limit=0]
+
+Diagnostics:
+  Suppress: ["*"]
+  ClangTidy:
+    Remove: ["*"]
+
+Index:
+  Background: Build
