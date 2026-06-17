@@ -164,6 +164,12 @@ if have_ga and host_os == 'linux'
   test_deps += {'test-qga': qga}
 endif
 
+if mem_encryption.allowed()
+  tests += {
+    'test-memory-encryption': [files('../../backends/memory-encryption-cipher.c')],
+  }
+endif
+
 test_env = environment()
 test_env.set('G_TEST_SRCDIR', meson.current_source_dir())
 test_env.set('G_TEST_BUILDDIR', meson.current_build_dir())

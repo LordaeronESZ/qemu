@@ -2603,6 +2603,11 @@ config_host_data.set('CONFIG_DEBUG_TCG', get_option('debug_tcg'))
 config_host_data.set('CONFIG_DEBUG_REMAP', get_option('debug_remap'))
 config_host_data.set('CONFIG_QOM_CAST_DEBUG', get_option('qom_cast_debug'))
 config_host_data.set('CONFIG_REPLICATION', get_option('replication').allowed())
+
+# Generic software memory-encryption backend (system-mode only). The symbol is
+# used to #ifdef the opt-in hot-path hooks in accel/tcg and system/physmem.
+mem_encryption = get_option('mem_encryption').enable_auto_if(have_system)
+config_host_data.set('CONFIG_MEM_ENCRYPTION', mem_encryption.allowed())
 config_host_data.set('CONFIG_FSFREEZE', qga_fsfreeze)
 config_host_data.set('CONFIG_FSTRIM', qga_fstrim)
 
@@ -4706,6 +4711,7 @@ if 'simple' in get_option('trace_backends')
 endif
 summary_info += {'QOM debugging':     get_option('qom_cast_debug')}
 summary_info += {'Relocatable install': get_option('relocatable')}
+summary_info += {'memory encryption backend': mem_encryption.allowed()}
 summary_info += {'vhost-kernel support': have_vhost_kernel}
 summary_info += {'vhost-net support': have_vhost_net}
 summary_info += {'vhost-user support': have_vhost_user}
