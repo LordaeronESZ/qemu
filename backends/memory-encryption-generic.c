@@ -1,10 +1,16 @@
 /*
- * QEMU Generic Memory Encryption - default confidential-guest wrapper
+ * QEMU Generic Memory Encryption - default -object wrapper
  *
- * A thin ConfidentialGuestSupport wrapper that owns a MemoryEncryptionEngine.
- * Suitable for machines that do not specialise their confidential-guest object
- * (i.e. do not cast cgs to an arch-specific subtype). The x86 target uses a
- * separate X86ConfidentialGuest-based wrapper (see target/i386/mem-enc.c).
+ * A plain user-creatable object that owns a MemoryEncryptionEngine and
+ * activates it as the process-wide singleton. It deliberately does NOT derive
+ * from
+ * ConfidentialGuestSupport: the encryption mechanism is a PMP-style simulator
+ * feature, independent of the confidential-guest (CGS) abstraction and of any
+ * target architecture. A CGS subclass is reserved for a future SEV-semantics
+ * layer that would own an engine and add C-bit/ASID/attestation behaviour.
+ *
+ * Usage:
+ *   -object memory-encryption-core-generic,id=mec0,cipher=identity,key=<hex>
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -14,18 +20,17 @@
 
 #include "qapi/error.h"
 #include "qom/object_interfaces.h"
-#include "system/confidential-guest-support.h"
 #include "system/memory-encryption.h"
 
 #define TYPE_MEMORY_ENCRYPTION_CORE_GENERIC "memory-encryption-core-generic"
-OBJECT_DECLARE_SIMPLE_TYPE(MemEncCoreGeneric, MEMORY_ENCRYPTION_CORE_GENERIC)
+OBJECT_DECLARE_SIMPLE_TYPE(MemEncCore, MEMORY_ENCRYPTION_CORE_GENERIC)
 
-typedef struct MemEncCoreGenericClass {
-    ConfidentialGuestSupportClass parent_class;
-} MemEncCoreGenericClass;
+typedef struct MemEncCoreClass {
+    ObjectClass parent_class;
+} MemEncCoreClass;
 
-struct MemEncCoreGeneric {
-    ConfidentialGuestSupport parent_obj;
+struct MemEncCore {
+    Object parent_obj;
 
     char *cipher_name;            /* -object property, e.g. "identity" */
     char *key_hex;                /* -object property: owner key in hex */
@@ -34,9 +39,9 @@ struct MemEncCoreGeneric {
     MemoryEncryptionEngine *engine;
 };
 
-OBJECT_DEFINE_TYPE_WITH_INTERFACES(MemEncCoreGeneric, mem_enc_core_generic,
+OBJECT_DEFINE_TYPE_WITH_INTERFACES(MemEncCore, mem_enc_core,
                                    MEMORY_ENCRYPTION_CORE_GENERIC,
-                                   CONFIDENTIAL_GUEST_SUPPORT,
+                                   OBJECT,
                                    { TYPE_USER_CREATABLE },
                                    { NULL })
 
@@ -77,88 +82,88 @@ static int hex_decode(const char *hex, uint8_t **out, size_t *outlen,
 /* QOM properties                                                           */
 /* ----------------------------------------------------------------------- */
 
-static char *mem_enc_core_generic_get_cipher(Object *obj, Error **errp)
+static char *mem_enc_core_get_cipher(Object *obj, Error **errp)
 {
     return g_strdup(MEMORY_ENCRYPTION_CORE_GENERIC(obj)->cipher_name);
 }
 
-static void mem_enc_core_generic_set_cipher(Object *obj, const char *value,
-                                            Error **errp)
+static void mem_enc_core_set_cipher(Object *obj, const char *value,
+                                    Error **errp)
 {
-    MemEncCoreGeneric *g = MEMORY_ENCRYPTION_CORE_GENERIC(obj);
+    MemEncCore *c = MEMORY_ENCRYPTION_CORE_GENERIC(obj);
 
-    g_free(g->cipher_name);
-    g->cipher_name = g_strdup(value);
+    g_free(c->cipher_name);
+    c->cipher_name = g_strdup(value);
 }
 
-static char *mem_enc_core_generic_get_key(Object *obj, Error **errp)
+static char *mem_enc_core_get_key(Object *obj, Error **errp)
 {
     return g_strdup(MEMORY_ENCRYPTION_CORE_GENERIC(obj)->key_hex ?: "");
 }
 
-static void mem_enc_core_generic_set_key(Object *obj, const char *value,
-                                         Error **errp)
+static void mem_enc_core_set_key(Object *obj, const char *value, Error **errp)
 {
-    MemEncCoreGeneric *g = MEMORY_ENCRYPTION_CORE_GENERIC(obj);
+    MemEncCore *c = MEMORY_ENCRYPTION_CORE_GENERIC(obj);
 
-    g_free(g->key_hex);
-    g->key_hex = g_strdup(value);
+    g_free(c->key_hex);
+    c->key_hex = g_strdup(value);
 }
 
 /* ----------------------------------------------------------------------- */
 /* realization                                                              */
 /* ----------------------------------------------------------------------- */
 
-static void mem_enc_core_generic_complete(UserCreatable *uc, Error **errp)
+static void mem_enc_core_complete(UserCreatable *uc, Error **errp)
 {
-    MemEncCoreGeneric *g = MEMORY_ENCRYPTION_CORE_GENERIC(uc);
+    MemEncCore *c = MEMORY_ENCRYPTION_CORE_GENERIC(uc);
     g_autofree uint8_t *key = NULL;
     size_t keylen = 0;
 
-    if (g->key_hex) {
-        if (hex_decode(g->key_hex, &key, &keylen, errp) < 0) {
+    if (c->key_hex) {
+        if (hex_decode(c->key_hex, &key, &keylen, errp) < 0) {
             return;
         }
     }
 
-    g->engine = mem_enc_engine_new(g->cipher_name, g->owner_key_id);
+    c->engine = mem_enc_engine_new(c->cipher_name, c->owner_key_id);
 
-    if (mem_enc_set_key(g->engine, g->owner_key_id, key, keylen, errp) < 0) {
+    if (mem_enc_set_key(c->engine, c->owner_key_id, key, keylen, errp) < 0) {
         return;
     }
 
-    mem_enc_engine_activate(g->engine, &g->parent_obj);
+    /* Activate the singleton; the hot-path hooks observe it via mem_enc_get. */
+    mem_enc_engine_activate(c->engine);
 }
 
-static void mem_enc_core_generic_init(Object *obj)
+static void mem_enc_core_init(Object *obj)
 {
-    MemEncCoreGeneric *g = MEMORY_ENCRYPTION_CORE_GENERIC(obj);
+    MemEncCore *c = MEMORY_ENCRYPTION_CORE_GENERIC(obj);
 
-    g->cipher_name = g_strdup("identity");
-    g->owner_key_id = 1;
+    c->cipher_name = g_strdup("identity");
+    c->owner_key_id = 1;
 
     object_property_add_str(obj, "cipher",
-                            mem_enc_core_generic_get_cipher,
-                            mem_enc_core_generic_set_cipher);
+                            mem_enc_core_get_cipher,
+                            mem_enc_core_set_cipher);
     object_property_add_str(obj, "key",
-                            mem_enc_core_generic_get_key,
-                            mem_enc_core_generic_set_key);
-    object_property_add_uint32_ptr(obj, "owner-key-id", &g->owner_key_id,
+                            mem_enc_core_get_key,
+                            mem_enc_core_set_key);
+    object_property_add_uint32_ptr(obj, "owner-key-id", &c->owner_key_id,
                                    OBJ_PROP_FLAG_READWRITE);
 }
 
-static void mem_enc_core_generic_finalize(Object *obj)
+static void mem_enc_core_finalize(Object *obj)
 {
-    MemEncCoreGeneric *g = MEMORY_ENCRYPTION_CORE_GENERIC(obj);
+    MemEncCore *c = MEMORY_ENCRYPTION_CORE_GENERIC(obj);
 
-    mem_enc_engine_free(g->engine);
-    g_free(g->cipher_name);
-    g_free(g->key_hex);
+    mem_enc_engine_free(c->engine);
+    g_free(c->cipher_name);
+    g_free(c->key_hex);
 }
 
-static void mem_enc_core_generic_class_init(ObjectClass *oc, const void *data)
+static void mem_enc_core_class_init(ObjectClass *oc, const void *data)
 {
     UserCreatableClass *uc = USER_CREATABLE_CLASS(oc);
 
-    uc->complete = mem_enc_core_generic_complete;
+    uc->complete = mem_enc_core_complete;
 }

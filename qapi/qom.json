@@ -1200,26 +1200,6 @@
   'if': 'CONFIG_MEM_ENCRYPTION' }
 
 ##
-# @X86MemoryEncryptionCoreGenericProperties:
-#
-# Properties for x86-memory-encryption-core-generic objects, the x86
-# confidential-guest wrapper around the generic encryption engine.
-#
-# @cipher: the cipher to use for page encryption (default: "identity")
-#
-# @key: the owner key, as a hex string
-#
-# @owner-key-id: the key id of the owner key (default: 1)
-#
-# Since: 11.1
-##
-{ 'struct': 'X86MemoryEncryptionCoreGenericProperties',
-  'data': { '*cipher': 'str',
-            '*key': 'str',
-            '*owner-key-id': 'uint32' },
-  'if': 'CONFIG_MEM_ENCRYPTION' }
-
-##
 # @ObjectType:
 #
 # Features:
@@ -1270,8 +1250,6 @@
     { 'name': 'memory-backend-shm',
       'if': 'CONFIG_POSIX' },
     { 'name': 'memory-encryption-core-generic',
-      'if': 'CONFIG_MEM_ENCRYPTION' },
-    { 'name': 'x86-memory-encryption-core-generic',
       'if': 'CONFIG_MEM_ENCRYPTION' },
     'pef-guest',
     { 'name': 'pr-manager-helper',
@@ -1353,8 +1331,6 @@
                                       'if': 'CONFIG_POSIX' },
       'memory-encryption-core-generic': { 'type': 'MemoryEncryptionCoreGenericProperties',
                                          'if': 'CONFIG_MEM_ENCRYPTION' },
-      'x86-memory-encryption-core-generic': { 'type': 'X86MemoryEncryptionCoreGenericProperties',
-                                             'if': 'CONFIG_MEM_ENCRYPTION' },
       'pr-manager-helper':          { 'type': 'PrManagerHelperProperties',
                                       'if': 'CONFIG_LINUX' },
       'qtest':                      'QtestProperties',

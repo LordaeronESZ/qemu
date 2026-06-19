@@ -7,10 +7,12 @@
  * according to an access-specific key id. With the correct key a reader sees
  * plaintext; with the wrong key it sees garbage -- matching AMD SEV semantics.
  *
- * The engine is deliberately NOT a QOM type: it is reusable machinery owned by
- * a per-arch confidential-guest wrapper. The generic wrapper (parent
- * ConfidentialGuestSupport) suits machines that don't specialise their cgs; an
- * x86 wrapper (parent X86ConfidentialGuest) supplies the C-bit/ASID resolver.
+ * The engine is deliberately NOT a QOM type: it is reusable machinery, attached
+ * to a VM purely by activating a process-wide singleton (see mem_enc_get()).
+ * This keeps the encryption mechanism -- a PMP-style simulator feature -- fully
+ * independent of the confidential-guest (CGS) abstraction and of any particular
+ * target architecture. A CGS subclass is reserved for a future SEV-semantics
+ * layer that would own an engine and add C-bit/ASID/attestation behaviour.
  *
  * This provides no real confidentiality; it is a simulation facility for
  * developing and testing confidential-computing software on TCG.
@@ -44,7 +46,7 @@ typedef struct MemoryEncryptionEngine MemoryEncryptionEngine;
 MemoryEncryptionEngine *mem_enc_get(void);
 
 /* ----------------------------------------------------------------------- */
-/* Engine lifecycle (called by the CGS wrappers)                            */
+/* Engine lifecycle (called by the -object wrapper's complete hook)         */
 /* ----------------------------------------------------------------------- */
 
 MemoryEncryptionEngine *mem_enc_engine_new(const char *cipher_name,
@@ -52,11 +54,12 @@ MemoryEncryptionEngine *mem_enc_engine_new(const char *cipher_name,
 void mem_enc_engine_free(MemoryEncryptionEngine *eng);
 
 /*
- * Publish @eng as the active singleton and mark the owning confidential-guest
- * object ready. Called from a wrapper's realise/complete hook.
+ * Publish @eng as the active singleton. The CPU hot-path and (future) flatview
+ * hooks observe it via mem_enc_get(). Called from the owning -object wrapper's
+ * UserCreatable.complete hook, which runs during command-line parsing -- before
+ * machine init or CPU execution, so the singleton is set in time.
  */
-void mem_enc_engine_activate(MemoryEncryptionEngine *eng,
-                             ConfidentialGuestSupport *cgs);
+void mem_enc_engine_activate(MemoryEncryptionEngine *eng);
 
 /* ----------------------------------------------------------------------- */
 /* Key management                                                           */

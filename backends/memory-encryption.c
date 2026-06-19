@@ -14,7 +14,6 @@
 #include "qapi/error.h"
 #include "qemu/bitops.h"
 #include "exec/target_page.h"
-#include "system/confidential-guest-support.h"
 #include "system/memory-encryption.h"
 #include "system/memory-encryption-cipher.h"
 
@@ -246,14 +245,10 @@ void mem_enc_engine_free(MemoryEncryptionEngine *e)
     g_free(e);
 }
 
-void mem_enc_engine_activate(MemoryEncryptionEngine *e,
-                             ConfidentialGuestSupport *cgs)
+void mem_enc_engine_activate(MemoryEncryptionEngine *e)
 {
     assert(mem_eng_singleton == NULL || mem_eng_singleton == e);
     mem_eng_singleton = e;
-    if (cgs) {
-        cgs->ready = true;
-    }
 }
 
 /* ----------------------------------------------------------------------- */
