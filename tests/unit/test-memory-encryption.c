@@ -125,6 +125,70 @@ static void test_address_dependence(void)
     mem_enc_cipher_free(c);
 }
 
+/*
+ * AES-256-XTS via the crypto/ subsystem: the same mechanism tests (correct key
+ * -> plaintext, wrong key -> garbage, distinct addresses -> distinct cipher),
+ * at page granularity. Skipped gracefully when the QEMU build has no crypto
+ * backend (nettle/gcrypt/gnutls), in which case set_key fails.
+ */
+static void test_aes_256_xts(void)
+{
+    uint8_t key_a[64], key_b[64];
+    const hwaddr gpa = 0x100000;
+    g_autofree uint8_t *plain = g_malloc(PAGE);
+    g_autofree uint8_t *cipher = g_malloc(PAGE);
+    g_autofree uint8_t *dec_ok = g_malloc(PAGE);
+    g_autofree uint8_t *dec_wrong = g_malloc(PAGE);
+    g_autofree uint8_t *cipher2 = g_malloc(PAGE);
+    MemEncCipher *a, *b;
+    Error *err = NULL;
+
+    for (int i = 0; i < 64; i++) {
+        key_a[i] = (uint8_t)i;
+        key_b[i] = (uint8_t)(0xc0 ^ i);
+    }
+
+    a = mem_enc_cipher_new("aes-256-xts", &err);
+    g_assert(a != NULL);
+    if (mem_enc_cipher_set_key(a, key_a, sizeof(key_a), &err) < 0) {
+        g_test_skip("AES-256-XTS needs a crypto backend (none in this build)");
+        error_free(err);
+        mem_enc_cipher_free(a);
+        return;
+    }
+
+    b = mem_enc_cipher_new("aes-256-xts", &error_abort);
+    g_assert(mem_enc_cipher_set_key(b, key_b, sizeof(key_b),
+                                    &error_abort) == 0);
+
+    for (int i = 0; i < PAGE; i++) {
+        plain[i] = (uint8_t)(i * 7 + 3);
+    }
+
+    /* Encrypt with A. */
+    g_assert(mem_enc_cipher_encrypt(a, gpa, plain, cipher, PAGE,
+                                    &error_abort) == 0);
+    g_assert(memcmp(plain, cipher, PAGE) != 0);
+
+    /* Correct key round-trips to plaintext. */
+    g_assert(mem_enc_cipher_decrypt(a, gpa, cipher, dec_ok, PAGE,
+                                    &error_abort) == 0);
+    g_assert(memcmp(plain, dec_ok, PAGE) == 0);
+
+    /* Wrong key yields garbage. */
+    g_assert(mem_enc_cipher_decrypt(b, gpa, cipher, dec_wrong, PAGE,
+                                    &error_abort) == 0);
+    g_assert(memcmp(plain, dec_wrong, PAGE) != 0);
+
+    /* Distinct page addresses yield distinct ciphertext (tweak from gpa). */
+    g_assert(mem_enc_cipher_encrypt(a, gpa + PAGE, plain, cipher2, PAGE,
+                                    &error_abort) == 0);
+    g_assert(memcmp(cipher, cipher2, PAGE) != 0);
+
+    mem_enc_cipher_free(a);
+    mem_enc_cipher_free(b);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -134,6 +198,8 @@ int main(int argc, char **argv)
     g_test_add_func("/memory-encryption/cipher/roundtrip", test_roundtrip);
     g_test_add_func("/memory-encryption/cipher/address-dependence",
                     test_address_dependence);
+    g_test_add_func("/memory-encryption/cipher/aes-256-xts",
+                    test_aes_256_xts);
 
     return g_test_run();
 }

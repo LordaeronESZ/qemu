@@ -166,7 +166,8 @@ endif
 
 if mem_encryption.allowed()
   tests += {
-    'test-memory-encryption': [files('../../backends/memory-encryption-cipher.c')],
+    'test-memory-encryption': [crypto,
+                                   files('../../backends/memory-encryption-cipher.c')],
   }
 endif
 

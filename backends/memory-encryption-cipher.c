@@ -8,6 +8,8 @@
 #include "qemu/osdep.h"
 
 #include "qapi/error.h"
+#include "qemu/bswap.h"
+#include "crypto/cipher.h"
 #include "system/memory-encryption-cipher.h"
 
 /*
@@ -102,14 +104,116 @@ MemEncCipher *mem_enc_cipher_identity_new(void)
 }
 
 /*
- * AES-256-XTS
+ * AES-256-XTS, wired to QEMU's crypto/ subsystem (QCryptoCipher).
  *
- * Wired to QEMU's crypto/ subsystem in a later milestone. For now provide a
- * placeholder so the cipher-name property and the factory are well defined.
+ * This is the realistic tweakable cipher used for memory encryption (the same
+ * mode AMD SEV uses). XTS encrypts a "data unit" under a tweak (the data-unit
+ * number); here each managed page is one data unit, and the tweak is derived
+ * from the page's guest physical address, so identical plaintext on two pages
+ * yields different ciphertext.
+ *
+ * Requires a crypto backend (nettle/gcrypt/gnutls) compiled into QEMU. If no
+ * backend is present, set_key reports a clear error so the object fails to
+ * realise rather than silently producing no encryption.
  */
+#define MEM_ENC_AES_XTS_KEYLEN 64   /* 2 x 32-byte AES-256 keys */
+
+typedef struct MemEncAesXtsCipher {
+    MemEncCipher parent;
+    QCryptoCipher *cipher;     /* created lazily in set_key */
+} MemEncAesXtsCipher;
+
+static int aes_xts_set_key(MemEncCipher *c, const uint8_t *key, size_t keylen,
+                           Error **errp)
+{
+    MemEncAesXtsCipher *a = (MemEncAesXtsCipher *)c;
+    QCryptoCipher *qc;
+
+    if (!qcrypto_cipher_supports(QCRYPTO_CIPHER_ALGO_AES_256,
+                                 QCRYPTO_CIPHER_MODE_XTS)) {
+        error_setg(errp, "AES-256-XTS requires a crypto backend "
+                   "(nettle, gcrypt or gnutls); rebuild QEMU with one enabled");
+        return -1;
+    }
+    if (keylen != MEM_ENC_AES_XTS_KEYLEN) {
+        error_setg(errp, "AES-256-XTS requires a %d-byte (2x32) key, got %zu",
+                   MEM_ENC_AES_XTS_KEYLEN, keylen);
+        return -1;
+    }
+
+    qc = qcrypto_cipher_new(QCRYPTO_CIPHER_ALGO_AES_256,
+                            QCRYPTO_CIPHER_MODE_XTS, key, keylen, errp);
+    if (!qc) {
+        return -1;
+    }
+    qcrypto_cipher_free(a->cipher);
+    a->cipher = qc;
+    return 0;
+}
+
+/* Build the 16-byte XTS tweak (data-unit number) from the page gpa. */
+static void aes_xts_tweak(hwaddr gpa, uint8_t tweak[16])
+{
+    memset(tweak, 0, 16);
+    stq_le_p(tweak, (uint64_t)gpa);
+}
+
+static int aes_xts_encrypt(MemEncCipher *c, hwaddr gpa, const void *in,
+                           void *out, size_t len, Error **errp)
+{
+    MemEncAesXtsCipher *a = (MemEncAesXtsCipher *)c;
+    uint8_t tweak[16];
+
+    if (!a->cipher) {
+        error_setg(errp, "AES-256-XTS cipher has no key set");
+        return -1;
+    }
+    aes_xts_tweak(gpa, tweak);
+    if (qcrypto_cipher_setiv(a->cipher, tweak, sizeof(tweak), errp) < 0) {
+        return -1;
+    }
+    return qcrypto_cipher_encrypt(a->cipher, in, out, len, errp);
+}
+
+static int aes_xts_decrypt(MemEncCipher *c, hwaddr gpa, const void *in,
+                           void *out, size_t len, Error **errp)
+{
+    MemEncAesXtsCipher *a = (MemEncAesXtsCipher *)c;
+    uint8_t tweak[16];
+
+    if (!a->cipher) {
+        error_setg(errp, "AES-256-XTS cipher has no key set");
+        return -1;
+    }
+    aes_xts_tweak(gpa, tweak);
+    if (qcrypto_cipher_setiv(a->cipher, tweak, sizeof(tweak), errp) < 0) {
+        return -1;
+    }
+    return qcrypto_cipher_decrypt(a->cipher, in, out, len, errp);
+}
+
+static void aes_xts_free(MemEncCipher *c)
+{
+    MemEncAesXtsCipher *a = (MemEncAesXtsCipher *)c;
+
+    qcrypto_cipher_free(a->cipher);
+    g_free(c);
+}
+
+static const MemEncCipherOps aes_xts_ops = {
+    .name = "aes-256-xts",
+    .set_key = aes_xts_set_key,
+    .encrypt = aes_xts_encrypt,
+    .decrypt = aes_xts_decrypt,
+    .free = aes_xts_free,
+};
+
 MemEncCipher *mem_enc_cipher_aes_xts_new(void)
 {
-    return NULL;
+    MemEncAesXtsCipher *a = g_new0(MemEncAesXtsCipher, 1);
+
+    a->parent.ops = &aes_xts_ops;
+    return &a->parent;
 }
 
 MemEncCipher *mem_enc_cipher_new(const char *name, Error **errp)
@@ -118,12 +222,7 @@ MemEncCipher *mem_enc_cipher_new(const char *name, Error **errp)
         return mem_enc_cipher_identity_new();
     }
     if (g_str_equal(name, "aes-256-xts")) {
-        MemEncCipher *c = mem_enc_cipher_aes_xts_new();
-        if (!c) {
-            error_setg(errp, "cipher '%s' is not implemented in this build",
-                       name);
-        }
-        return c;
+        return mem_enc_cipher_aes_xts_new();
     }
 
     error_setg(errp, "unknown memory-encryption cipher '%s'", name);
