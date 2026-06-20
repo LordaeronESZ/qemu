@@ -56,6 +56,9 @@
 #include "system/memory_cached.h"
 #include "system/ioport.h"
 #include "system/dma.h"
+#ifdef CONFIG_MEM_ENCRYPTION
+#include "system/memory-encryption.h"
+#endif
 #include "system/hostmem.h"
 #include "system/hw_accel.h"
 #include "system/xen-mapcache.h"
@@ -3235,6 +3238,39 @@ static bool flatview_access_allowed(MemoryRegion *mr, MemTxAttrs attrs,
     return false;
 }
 
+#ifdef CONFIG_MEM_ENCRYPTION
+/*
+ * Return the active encryption engine if @mr at @mr_addr is a managed
+ * (encrypted) RAM page; also output its RAMBlock and the absolute ram_addr.
+ * Used by the flatview RAM path to keep the engine's working-page cache
+ * coherent with external (DMA/monitor/migration) accesses.
+ */
+static MemoryEncryptionEngine *mem_enc_for_ram(MemoryRegion *mr,
+                                               hwaddr mr_addr,
+                                               RAMBlock **block_out,
+                                               ram_addr_t *ram_addr_out)
+{
+    MemoryEncryptionEngine *eng = mem_enc_get();
+    RAMBlock *block;
+    ram_addr_t ra;
+
+    if (!eng) {
+        return NULL;
+    }
+    block = mr->ram_block;
+    if (!block) {
+        return NULL;
+    }
+    ra = memory_region_get_ram_addr(mr) + mr_addr;
+    if (!mem_enc_page_managed(eng, block, ra)) {
+        return NULL;
+    }
+    *block_out = block;
+    *ram_addr_out = ra;
+    return eng;
+}
+#endif
+
 static MemTxResult flatview_write_continue_step(MemTxAttrs attrs,
                                                 const uint8_t *buf,
                                                 hwaddr len, hwaddr mr_addr,
@@ -3280,6 +3316,24 @@ static MemTxResult flatview_write_continue_step(MemTxAttrs attrs,
 
         memmove(ram_ptr, buf, *l);
         invalidate_and_set_dirty(mr, mr_addr, *l);
+
+#ifdef CONFIG_MEM_ENCRYPTION
+        /*
+         * An external writer (DMA/monitor/migration) just overwrote the
+         * ciphertext backing; drop any cached working page so the next CPU
+         * access re-decrypts the new backing.
+         */
+        {
+            RAMBlock *mb;
+            ram_addr_t mra;
+            MemoryEncryptionEngine *eng;
+
+            eng = mem_enc_for_ram(mr, mr_addr, &mb, &mra);
+            if (eng) {
+                mem_enc_invalidate(eng, mb, mra, *l);
+            }
+        }
+#endif
 
         return MEMTX_OK;
     }
@@ -3370,6 +3424,24 @@ static MemTxResult flatview_read_continue_step(MemTxAttrs attrs, uint8_t *buf,
         /* RAM case */
         uint8_t *ram_ptr = qemu_ram_ptr_length(mr->ram_block, mr_addr, l,
                                                false, false);
+
+#ifdef CONFIG_MEM_ENCRYPTION
+        /*
+         * Flush any dirty working page back into the ciphertext backing so this
+         * external reader observes the current contents rather than a stale
+         * copy.
+         */
+        {
+            RAMBlock *mb;
+            ram_addr_t mra;
+            MemoryEncryptionEngine *eng;
+
+            eng = mem_enc_for_ram(mr, mr_addr, &mb, &mra);
+            if (eng) {
+                mem_enc_flush(eng, mb, mra, *l);
+            }
+        }
+#endif
 
         memcpy(buf, ram_ptr, *l);
 

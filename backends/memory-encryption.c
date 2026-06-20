@@ -520,15 +520,61 @@ int mem_enc_write(MemoryEncryptionEngine *e, RAMBlock *block,
 void mem_enc_flush(MemoryEncryptionEngine *e, RAMBlock *block,
                    ram_addr_t offset, size_t len)
 {
+    size_t psz = page_size_of(block);
+    ram_addr_t start = offset & ~(psz - 1);
+    ram_addr_t end = (offset + len + psz - 1) & ~(psz - 1);
+    ram_addr_t page_off;
+
     /*
-     * For M1 the CPU writes working pages directly and they are marked dirty
-     * conservatively; re-encryption on demand is handled where the backing is
-     * read. Full LRU eviction + proactive write-back is a later refinement.
+     * Only the owner-key working page can be dirty (the guest CPU accesses its
+     * private memory with the owner key; wrong-key pages are read-only views).
+     * Write each dirty owner-key page back into the ciphertext backing.
      */
-    (void)e;
-    (void)block;
-    (void)offset;
-    (void)len;
+    qemu_mutex_lock(&e->lock);
+    for (page_off = start; page_off < end; page_off += psz) {
+        MemEncWorkKey k = { block, page_off / psz, e->owner_key_id };
+        MemEncWorkPage *wp = g_hash_table_lookup(e->working, &k);
+
+        if (wp && wp->dirty) {
+            if (encrypt_backing_page(e, block, page_off, wp->plain,
+                                     e->owner_key_id, NULL) == 0) {
+                wp->dirty = false;
+            }
+        }
+    }
+    qemu_mutex_unlock(&e->lock);
+}
+
+typedef struct InvalidateCtx {
+    RAMBlock *block;
+    uint64_t start_idx;
+    uint64_t end_idx;
+} InvalidateCtx;
+
+static gboolean invalidate_pred(gpointer key, gpointer value,
+                                gpointer user_data)
+{
+    MemEncWorkPage *wp = value;
+    InvalidateCtx *c = user_data;
+
+    return wp->key.block == c->block &&
+           wp->key.page_idx >= c->start_idx &&
+           wp->key.page_idx < c->end_idx;
+}
+
+void mem_enc_invalidate(MemoryEncryptionEngine *e, RAMBlock *block,
+                        ram_addr_t offset, size_t len)
+{
+    size_t psz = page_size_of(block);
+    InvalidateCtx c = {
+        .block = block,
+        .start_idx = (offset & ~(psz - 1)) / psz,
+        .end_idx = ((offset + len + psz - 1) & ~(psz - 1)) / psz,
+    };
+
+    qemu_mutex_lock(&e->lock);
+    g_hash_table_foreach_remove(e->working, invalidate_pred, &c);
+    qemu_mutex_unlock(&e->lock);
 }
 
 static void count_managed_pages(gpointer key, gpointer value,
