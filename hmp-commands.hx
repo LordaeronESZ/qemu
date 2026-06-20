@@ -831,6 +831,34 @@ SRST
 ERST
 
     {
+        .name       = "memory-encryption-dump-page",
+        .args_type  = "gpa:l",
+        .params     = "gpa",
+        .help       = "dump the plaintext and ciphertext views of one page (generic memory encryption)",
+        .cmd        = hmp_memory_encryption_dump_page,
+    },
+
+SRST
+``memory-encryption-dump-page`` *gpa*
+  Dump the plaintext (guest-CPU) and ciphertext (host) views of the
+  page at guest physical address *gpa*.
+ERST
+
+    {
+        .name       = "memory-encryption-mark-managed",
+        .args_type  = "gpa:l,size:l",
+        .params     = "gpa size",
+        .help       = "mark a page range as managed/encrypted (generic memory encryption)",
+        .cmd        = hmp_memory_encryption_mark_managed,
+    },
+
+SRST
+``memory-encryption-mark-managed`` *gpa* *size*
+  Mark the range [*gpa*, *gpa* + *size*) as managed: encrypt its current
+  plaintext contents into the ciphertext backing.
+ERST
+
+    {
         .name       = "boot_set",
         .args_type  = "bootdevice:s",
         .params     = "bootdevice",

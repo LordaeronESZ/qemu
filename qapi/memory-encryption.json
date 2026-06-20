@@ -1,0 +1,107 @@
+# -*- Mode: Python -*-
+# vim: filetype=python
+#
+# This work is licensed under the terms of the GNU GPL, version 2 or later.
+# See the COPYING file in the top-level directory.
+
+##
+# = Generic memory encryption
+#
+# These commands manage the generic software memory-encryption engine
+# (see -object memory-encryption-core-generic).  They are present only
+# when QEMU is built with the mem_encryption feature.
+##
+
+##
+# @MemoryEncryptionInfo:
+#
+# Status of the generic memory-encryption engine.
+#
+# @enabled: true if an encryption engine is active
+#
+# @cipher: the cipher in use (e.g. "identity")
+#
+# @owner-key-id: the key id used to encrypt managed pages
+#
+# @managed-pages: number of pages whose backing holds ciphertext
+#
+# @working-pages: number of plaintext working pages currently cached
+#
+# Since: 11.1
+##
+{ 'struct': 'MemoryEncryptionInfo',
+  'data': { 'enabled': 'bool',
+            '*cipher': 'str',
+            '*owner-key-id': 'uint32',
+            '*managed-pages': 'uint64',
+            '*working-pages': 'uint64' },
+  'if': 'CONFIG_MEM_ENCRYPTION' }
+
+##
+# @query-memory-encryption:
+#
+# Query the status of the generic memory-encryption engine.
+#
+# Returns: @MemoryEncryptionInfo
+#
+# Since: 11.1
+##
+{ 'command': 'query-memory-encryption',
+  'returns': 'MemoryEncryptionInfo',
+  'if': 'CONFIG_MEM_ENCRYPTION' }
+
+##
+# @MemoryEncryptionPage:
+#
+# The plaintext and ciphertext views of one guest physical page.
+#
+# @gpa: the guest physical address of the page
+#
+# @managed: whether the page is managed (backing holds ciphertext)
+#
+# @plaintext-hex: the page as the guest CPU sees it, hex encoded
+#
+# @ciphertext-hex: the page as a host or external reader sees it,
+#     hex encoded
+#
+# Since: 11.1
+##
+{ 'struct': 'MemoryEncryptionPage',
+  'data': { 'gpa': 'uint64',
+            'managed': 'bool',
+            'plaintext-hex': 'str',
+            'ciphertext-hex': 'str' },
+  'if': 'CONFIG_MEM_ENCRYPTION' }
+
+##
+# @memory-encryption-dump-page:
+#
+# Dump the plaintext and ciphertext views of the page at @gpa.
+#
+# @gpa: the guest physical address (must be page-aligned)
+#
+# Returns: @MemoryEncryptionPage
+#
+# Since: 11.1
+##
+{ 'command': 'memory-encryption-dump-page',
+  'data': { 'gpa': 'uint64' },
+  'returns': 'MemoryEncryptionPage',
+  'if': 'CONFIG_MEM_ENCRYPTION' }
+
+##
+# @memory-encryption-mark-managed:
+#
+# Mark [@gpa, @gpa + @size) as managed: encrypt the current plaintext
+# contents into the ciphertext backing.  Intended for testing and the
+# launch-update step.
+#
+# @gpa: base guest physical address (must be page-aligned)
+#
+# @size: length in bytes (must be a multiple of the page size)
+#
+# Since: 11.1
+##
+{ 'command': 'memory-encryption-mark-managed',
+  'data': { 'gpa': 'uint64', 'size': 'uint64' },
+  'if': 'CONFIG_MEM_ENCRYPTION' }

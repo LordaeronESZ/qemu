@@ -531,11 +531,30 @@ void mem_enc_flush(MemoryEncryptionEngine *e, RAMBlock *block,
     (void)len;
 }
 
+static void count_managed_pages(gpointer key, gpointer value,
+                                gpointer user_data)
+{
+    MemEncManagedBlock *mb = value;
+    uint64_t *total = user_data;
+    size_t i;
+
+    for (i = 0; i < mb->num_pages; i++) {
+        if (test_bit(i, mb->managed_bmap)) {
+            (*total)++;
+        }
+    }
+}
+
 void mem_enc_get_stats(MemoryEncryptionEngine *e, uint64_t *managed_pages,
                        uint64_t *working_pages, const char **cipher_name)
 {
     if (managed_pages) {
-        *managed_pages = 0; /* TODO: sum managed bmaps */
+        uint64_t total = 0;
+
+        qemu_mutex_lock(&e->lock);
+        g_hash_table_foreach(e->managed, count_managed_pages, &total);
+        qemu_mutex_unlock(&e->lock);
+        *managed_pages = total;
     }
     if (working_pages) {
         qemu_mutex_lock(&e->lock);
@@ -545,4 +564,9 @@ void mem_enc_get_stats(MemoryEncryptionEngine *e, uint64_t *managed_pages,
     if (cipher_name) {
         *cipher_name = e->cipher_name;
     }
+}
+
+uint32_t mem_enc_owner_key_id(MemoryEncryptionEngine *e)
+{
+    return e->owner_key_id;
 }

@@ -15,6 +15,7 @@ if mem_encryption.allowed()
         'memory-encryption-cipher.c',
         'memory-encryption.c',
         'memory-encryption-generic.c',
+        'memory-encryption-qmp.c',
     ))
 endif
 

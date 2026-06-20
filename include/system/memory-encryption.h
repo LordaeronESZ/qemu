@@ -137,4 +137,7 @@ void mem_enc_flush(MemoryEncryptionEngine *eng, RAMBlock *block,
 void mem_enc_get_stats(MemoryEncryptionEngine *eng, uint64_t *managed_pages,
                        uint64_t *working_pages, const char **cipher_name);
 
+/* The owner key id (used to encrypt managed pages / as the default key). */
+uint32_t mem_enc_owner_key_id(MemoryEncryptionEngine *eng);
+
 #endif /* QEMU_MEMORY_ENCRYPTION_H */
