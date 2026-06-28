@@ -1200,6 +1200,38 @@
   'if': 'CONFIG_MEM_ENCRYPTION' }
 
 ##
+# @X86SevSimProperties:
+#
+# Properties for x86-sev-sim objects, a confidential-guest wrapper
+# driving the generic encryption engine with SEV (C-bit) semantics.
+#
+# @cbitpos: the guest-physical-address bit used as the encryption bit
+#     (default: 51)
+#
+# @reduced-phys-bits: physical address bits reported as reduced in
+#     CPUID leaf 0x8000001f (default: 1)
+#
+# @cipher: the cipher to use (default: "identity")
+#
+# @key: the owner key, as a hex string
+#
+# @owner-key-id: the key id of the owner key (default: 1)
+#
+# @encrypt-all: treat all CPU accesses as encrypted, ignoring the
+#     C-bit (default: false)
+#
+# Since: 11.1
+##
+{ 'struct': 'X86SevSimProperties',
+  'data': { '*cbitpos': 'uint32',
+            '*reduced-phys-bits': 'uint32',
+            '*cipher': 'str',
+            '*key': 'str',
+            '*owner-key-id': 'uint32',
+            '*encrypt-all': 'bool' },
+  'if': 'CONFIG_MEM_ENCRYPTION' }
+
+##
 # @ObjectType:
 #
 # Features:
@@ -1250,6 +1282,8 @@
     { 'name': 'memory-backend-shm',
       'if': 'CONFIG_POSIX' },
     { 'name': 'memory-encryption-core-generic',
+      'if': 'CONFIG_MEM_ENCRYPTION' },
+    { 'name': 'x86-sev-sim',
       'if': 'CONFIG_MEM_ENCRYPTION' },
     'pef-guest',
     { 'name': 'pr-manager-helper',
@@ -1331,6 +1365,8 @@
                                       'if': 'CONFIG_POSIX' },
       'memory-encryption-core-generic': { 'type': 'MemoryEncryptionCoreGenericProperties',
                                          'if': 'CONFIG_MEM_ENCRYPTION' },
+      'x86-sev-sim':                { 'type': 'X86SevSimProperties',
+                                     'if': 'CONFIG_MEM_ENCRYPTION' },
       'pr-manager-helper':          { 'type': 'PrManagerHelperProperties',
                                       'if': 'CONFIG_LINUX' },
       'qtest':                      'QtestProperties',

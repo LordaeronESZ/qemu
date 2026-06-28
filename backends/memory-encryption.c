@@ -43,6 +43,7 @@ struct MemoryEncryptionEngine {
     uint32_t owner_key_id;
     uint32_t (*key_resolver)(MemoryEncryptionEngine *, CPUState *, hwaddr,
                              MemTxAttrs);
+    bool auto_manage;  /* C-bit/private access claims unmanaged pages */
 
     QemuMutex lock;               /* protects the tables below */
     GHashTable *ciphers;          /* key_id -> MemEncCipher */
@@ -292,6 +293,11 @@ void mem_enc_set_key_resolver(MemoryEncryptionEngine *e,
     e->key_resolver = resolve;
 }
 
+void mem_enc_set_auto_manage(MemoryEncryptionEngine *e, bool on)
+{
+    e->auto_manage = on;
+}
+
 /* ----------------------------------------------------------------------- */
 /* page management                                                          */
 /* ----------------------------------------------------------------------- */
@@ -305,6 +311,26 @@ bool mem_enc_page_managed(MemoryEncryptionEngine *e, RAMBlock *block,
     managed = page_is_managed(e, block, offset);
     qemu_mutex_unlock(&e->lock);
     return managed;
+}
+
+/*
+ * Encrypt one page's plaintext backing (owner key) and mark it managed.
+ * Caller must hold e->lock. A page already managed is left untouched, so this
+ * is idempotent -- used both by the explicit mem_enc_mark_managed loop and by
+ * the auto-manage path (a C-bit/private access claiming an unmanaged page).
+ */
+static int mark_one_managed_locked(MemoryEncryptionEngine *e, RAMBlock *block,
+                                   ram_addr_t offset, Error **errp)
+{
+    if (page_is_managed(e, block, offset)) {
+        return 0;
+    }
+    if (encrypt_backing_page(e, block, offset, block->host + offset,
+                             e->owner_key_id, errp) < 0) {
+        return -1;
+    }
+    set_page_managed(e, block, offset);
+    return 0;
 }
 
 int mem_enc_mark_managed(MemoryEncryptionEngine *e, RAMBlock *block,
@@ -325,14 +351,10 @@ int mem_enc_mark_managed(MemoryEncryptionEngine *e, RAMBlock *block,
      * without the key see garbage.
      */
     for (page_off = offset; page_off < end; page_off += psz) {
-        if (encrypt_backing_page(e, block, page_off, block->host + page_off,
-                                 e->owner_key_id, errp) < 0) {
+        if (mark_one_managed_locked(e, block, page_off, errp) < 0) {
             qemu_mutex_unlock(&e->lock);
             return -1;
         }
-    }
-    for (page_off = offset; page_off < end; page_off += psz) {
-        set_page_managed(e, block, page_off);
     }
 
     qemu_mutex_unlock(&e->lock);
@@ -406,16 +428,35 @@ uintptr_t mem_enc_translate(MemoryEncryptionEngine *e, CPUState *cs,
 
     qemu_mutex_lock(&e->lock);
 
-    if (!page_is_managed(e, block, ram_addr)) {
-        qemu_mutex_unlock(&e->lock);
-        return addend; /* unmanaged: plaintext backing, normal path */
-    }
-
     key_id = resolve_key_id(e, cs, paddr, attrs);
     if (key_id == MEM_ENC_KEY_NONE) {
-        /* No key: the CPU observes the raw ciphertext backing. */
+        /*
+         * Shared/host view: no key, so observe the raw backing directly
+         * (ciphertext for an encrypted page, plaintext otherwise).
+         */
         qemu_mutex_unlock(&e->lock);
         return addend;
+    }
+
+    if (!page_is_managed(e, block, ram_addr)) {
+        if (!e->auto_manage) {
+            /*
+             * Explicit-managed policy (the generic engine): only pages
+             * pre-marked managed are encrypted; serve this page as plaintext.
+             */
+            qemu_mutex_unlock(&e->lock);
+            return addend;
+        }
+        /*
+         * Auto-manage: this private (e.g. SEV C-bit) access claims the
+         * unmanaged page as encrypted. Encrypt its current plaintext backing so
+         * the page becomes a normal managed/ciphertext page, then decrypt it
+         * into a working page below.
+         */
+        if (mark_one_managed_locked(e, block, ram_addr, NULL) < 0) {
+            qemu_mutex_unlock(&e->lock);
+            return addend;
+        }
     }
 
     page_idx = page_idx_of(block, ram_addr);

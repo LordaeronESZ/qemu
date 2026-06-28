@@ -29,6 +29,11 @@ typedef struct MemTxAttrs {
      */
     unsigned int secure:1;
     /*
+     * x86 SEV-style memory-encryption simulation: set when the guest physical
+     * address carried the encryption (C) bit, i.e. an encrypted/private access.
+     */
+    unsigned int mem_enc:1;
+    /*
      * ARM: ArmSecuritySpace.  This partially overlaps secure, but it is
      * easier to have both fields to assist code that does not understand
      * ARMv9 RME, or no specific knowledge of ARM at all (e.g. pflash).

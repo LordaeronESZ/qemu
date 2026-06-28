@@ -39,6 +39,9 @@
 #include "exec/watchpoint.h"
 #ifndef CONFIG_USER_ONLY
 #include "confidential-guest.h"
+#ifdef CONFIG_MEM_ENCRYPTION
+#include "sev-sim.h"
+#endif
 #include "system/reset.h"
 #include "qapi/qapi-commands-machine.h"
 #include "system/address-spaces.h"
@@ -9127,6 +9130,13 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
             *ebx = sev_get_cbit_position() & 0x3f; /* EBX[5:0] */
             *ebx |= (sev_get_reduced_phys_bits() & 0x3f) << 6; /* EBX[11:6] */
         }
+#ifdef CONFIG_MEM_ENCRYPTION
+        else if (x86_sev_sim_active()) {
+            *eax = 0x2;                                   /* SEV */
+            *ebx = x86_sev_sim_cbit_position() & 0x3f;    /* EBX[5:0] */
+            *ebx |= (x86_sev_sim_reduced_phys_bits() & 0x3f) << 6;
+        }
+#endif
         break;
     case 0x80000021:
         *eax = *ebx = *ecx = *edx = 0;

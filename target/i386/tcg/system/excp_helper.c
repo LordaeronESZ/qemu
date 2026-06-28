@@ -26,6 +26,9 @@
 #include "exec/target_page.h"
 #include "exec/tlb-flags.h"
 #include "tcg/helper-tcg.h"
+#ifdef CONFIG_MEM_ENCRYPTION
+#include "target/i386/sev-sim.h"
+#endif
 
 typedef struct TranslateParams {
     target_ulong addr;
@@ -624,10 +627,28 @@ bool x86_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
          * Even if 4MB pages, we map only one 4KB page in the cache to
          * avoid filling it too fast.
          */
+        MemTxAttrs attrs = cpu_get_mem_attrs(env);
+        hwaddr paddr = out.paddr & TARGET_PAGE_MASK;
+
         assert(out.prot & (1 << access_type));
-        tlb_set_page_with_attrs(cs, addr & TARGET_PAGE_MASK,
-                                out.paddr & TARGET_PAGE_MASK,
-                                cpu_get_mem_attrs(env),
+
+#ifdef CONFIG_MEM_ENCRYPTION
+        /*
+         * SEV-style simulation: strip the encryption (C) bit from the guest
+         * physical address before indexing RAM, and record that this was an
+         * encrypted access so the engine's key resolver can pick the owner key.
+         */
+        {
+            uint64_t cbit = x86_sev_sim_cbit_mask();
+
+            if (cbit && (paddr & cbit)) {
+                paddr &= ~(hwaddr)cbit;
+                attrs.mem_enc = 1;
+            }
+        }
+#endif
+
+        tlb_set_page_with_attrs(cs, addr & TARGET_PAGE_MASK, paddr, attrs,
                                 out.prot, mmu_idx, out.page_size);
         return true;
     }

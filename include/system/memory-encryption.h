@@ -79,6 +79,18 @@ void mem_enc_set_key_resolver(MemoryEncryptionEngine *eng,
                                                   CPUState *, hwaddr,
                                                   MemTxAttrs));
 
+/*
+ * Auto-manage policy. When enabled, a private (non-MEM_ENC_KEY_NONE) CPU access
+ * to an unmanaged page claims that page as encrypted: its current plaintext
+ * backing is encrypted into ciphertext and the page is marked managed, so the
+ * access is served from a decrypted working page. This makes the access-time
+ * attribute (e.g. the SEV C-bit) self-sufficient, instead of requiring every
+ * encrypted page to be pre-marked managed via mem_enc_mark_managed.
+ *
+ * Off by default: the generic engine only encrypts explicitly managed pages.
+ */
+void mem_enc_set_auto_manage(MemoryEncryptionEngine *eng, bool on);
+
 /* ----------------------------------------------------------------------- */
 /* Page management                                                          */
 /* ----------------------------------------------------------------------- */
