@@ -225,20 +225,22 @@ static void test_sev_sim_cpuid(void)
 
 /*
  * Boot sector that enables PAE paging with the C-bit (bit 51) set in a page
- * directory entry, then writes 0xBEEF through it. With x86-sev-sim,cbitpos=51
- * and phys-bits=52, bit 51 is the SEV C-bit: the page walk produces a
- * guest-physical address with bit 51 set, x86_cpu_tlb_fill strips it, and the
- * engine serves the access as private/encrypted. This is the faithful
- * end-to-end exercise of the C-bit path (strip C-bit, set attrs.mem_enc,
- * resolve owner key, auto-manage, translate, flush) as a real SEV guest would.
+ * directory entry, then exercises both views of the same physical page:
+ *   - PD[1] maps VA 0x200000 -> PA 0x200000 with C-bit (private/encrypted);
+ *   - PD[2] maps VA 0x400000 -> PA 0x200000 WITHOUT C-bit (shared/plaintext).
+ * The payload writes 0xBEEF through the private mapping, then reads it back
+ * through the shared mapping and stores the result at 0x5000 for the host to
+ * observe. With x86-sev-sim,cbitpos=51 and phys-bits=52, bit 51 is the SEV
+ * C-bit; the page walk sets it, x86_cpu_tlb_fill strips it, and the engine
+ * serves the private access via a decrypted working page while the shared
+ * access must observe the re-encrypted backing.
  *
  * PAE paging is unavoidable: any C-bit <= 31 collides with the high BIOS-ROM
  * alias at 0xFFFE0000 (bit 31 set), which crashes boot before the payload runs.
  * Bit 51 needs paging to represent, and phys-bits=52 so it is not a reserved
- * PDE bit. The real-mode prologue writes 0x1234 to 0x8000 as a liveness marker.
- * The C-bit target is VA/PA 0x200000 (PD[1], a 2 MB page whose PDE has bit 51
- * set); PD[0] is a plaintext identity 2 MB page. Tables: PDPT @ 0x70000,
- * PD @ 0x71000.
+ * PDE bit. PD[0] is a plaintext identity 2 MB page (code/tables/marker/result).
+ * Real-mode prologue writes 0x1234 to 0x8000 as a liveness marker.
+ * Tables: PDPT @ 0x70000, PD @ 0x71000.
  *
  * The bytes below are the gas-assembled (.code16/.code32) output of:
  *   cli ; xor %ax,%ax ; mov %ax,%ds
@@ -248,13 +250,15 @@ static void test_sev_sim_cpuid(void)
  *   movl $0x00071001,%es:0                      # PDPT[0] = PD | P
  *   movl $0x00000083,%es:0x1000 ; movl $0,%es:0x1004    # PD[0] identity
  *   movl $0x00200083,%es:0x1008 ; movl $0x00080000,%es:0x100c   # PD[1] +Cbit
+ *   movl $0x00200083,%es:0x1010 ; movl $0,%es:0x1014    # PD[2] shared
  *   lgdt gdtdesc
  *   mov $0x70000,%eax ; mov %eax,%cr3           # CR3 = PDPT
  *   mov %cr4,%eax ; or $0x20,%eax ; mov %eax,%cr4       # CR4.PAE
  *   mov %cr0,%eax ; or $0x80000001,%eax ; mov %eax,%cr0 # PE | PG
  *   ljmp $0x08,$pm32                            # 32-bit, paging on
  *   mov $0x10,%eax ; mov %eax,%ds ; mov %eax,%es
- *   mov $0xBEEF,%eax ; mov %eax,0x200000        # C-bit access
+ *   mov $0xBEEF,%eax ; mov %eax,0x200000        # private (C-bit) write
+ *   mov 0x400000,%eax ; mov %eax,0x5000         # shared read -> store
  *   hlt ; jmp $
  *   GDT: null | flat code (0x00cf9a000000ffff) | flat data (0x00cf920000ffff)
  */
@@ -268,19 +272,23 @@ static uint8_t cbit_boot_sector[512] = {
     /* 0x30 */ 0x26, 0x66, 0xc7, 0x06, 0x04, 0x10, 0x00, 0x00,
     /* 0x38 */ 0x00, 0x00, 0x26, 0x66, 0xc7, 0x06, 0x08, 0x10,
     /* 0x40 */ 0x83, 0x00, 0x20, 0x00, 0x26, 0x66, 0xc7, 0x06,
-    /* 0x48 */ 0x0c, 0x10, 0x00, 0x00, 0x08, 0x00, 0x0f, 0x01,
-    /* 0x50 */ 0x16, 0xa8, 0x7c, 0x66, 0xb8, 0x00, 0x00, 0x07,
-    /* 0x58 */ 0x00, 0x0f, 0x22, 0xd8, 0x0f, 0x20, 0xe0, 0x66,
-    /* 0x60 */ 0x83, 0xc8, 0x20, 0x0f, 0x22, 0xe0, 0x0f, 0x20,
-    /* 0x68 */ 0xc0, 0x66, 0x0d, 0x01, 0x00, 0x00, 0x80, 0x0f,
-    /* 0x70 */ 0x22, 0xc0, 0x66, 0xea, 0x7a, 0x7c, 0x00, 0x00,
-    /* 0x78 */ 0x08, 0x00, 0xb8, 0x10, 0x00, 0x00, 0x00, 0x8e,
-    /* 0x80 */ 0xd8, 0x8e, 0xc0, 0xb8, 0xef, 0xbe, 0x00, 0x00,
-    /* 0x88 */ 0xa3, 0x00, 0x00, 0x20, 0x00, 0xf4, 0xeb, 0xfe,
-    /* 0x90 */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    /* 0x98 */ 0xff, 0xff, 0x00, 0x00, 0x00, 0x9a, 0xcf, 0x00,
-    /* 0xa0 */ 0xff, 0xff, 0x00, 0x00, 0x00, 0x92, 0xcf, 0x00,
-    /* 0xa8 */ 0x17, 0x00, 0x90, 0x7c, 0x00, 0x00, 0x00, 0x00,
+    /* 0x48 */ 0x0c, 0x10, 0x00, 0x00, 0x08, 0x00, 0x26, 0x66,
+    /* 0x50 */ 0xc7, 0x06, 0x10, 0x10, 0x83, 0x00, 0x20, 0x00,
+    /* 0x58 */ 0x26, 0x66, 0xc7, 0x06, 0x14, 0x10, 0x00, 0x00,
+    /* 0x60 */ 0x00, 0x00, 0x0f, 0x01, 0x16, 0xc8, 0x7c, 0x66,
+    /* 0x68 */ 0xb8, 0x00, 0x00, 0x07, 0x00, 0x0f, 0x22, 0xd8,
+    /* 0x70 */ 0x0f, 0x20, 0xe0, 0x66, 0x83, 0xc8, 0x20, 0x0f,
+    /* 0x78 */ 0x22, 0xe0, 0x0f, 0x20, 0xc0, 0x66, 0x0d, 0x01,
+    /* 0x80 */ 0x00, 0x00, 0x80, 0x0f, 0x22, 0xc0, 0x66, 0xea,
+    /* 0x88 */ 0x8e, 0x7c, 0x00, 0x00, 0x08, 0x00, 0xb8, 0x10,
+    /* 0x90 */ 0x00, 0x00, 0x00, 0x8e, 0xd8, 0x8e, 0xc0, 0xb8,
+    /* 0x98 */ 0xef, 0xbe, 0x00, 0x00, 0xa3, 0x00, 0x00, 0x20,
+    /* 0xa0 */ 0x00, 0xa1, 0x00, 0x00, 0x40, 0x00, 0xa3, 0x00,
+    /* 0xa8 */ 0x50, 0x00, 0x00, 0xf4, 0xeb, 0xfe, 0x66, 0x90,
+    /* 0xb0 */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    /* 0xb8 */ 0xff, 0xff, 0x00, 0x00, 0x00, 0x9a, 0xcf, 0x00,
+    /* 0xc0 */ 0xff, 0xff, 0x00, 0x00, 0x00, 0x92, 0xcf, 0x00,
+    /* 0xc8 */ 0x17, 0x00, 0xb0, 0x7c, 0x00, 0x00, 0x00, 0x00,
     [0x1fe] = 0x55, 0xaa,
 };
 
@@ -367,6 +375,199 @@ static void test_sev_sim_cbit_encryption(void)
     disk_path = NULL;
 }
 
+/*
+ * Verify a shared (C-bit=0) CPU read of an encrypted page observes the page's
+ * current ciphertext, not a stale backing. The boot sector writes 0xBEEF
+ * through the private (C-bit=1) mapping -- dirtying the owner working page --
+ * then reads the same physical page through the shared (C-bit=0) mapping and
+ * stores the result at 0x5000. The engine must flush the dirty owner page
+ * before serving the keyless read; otherwise 0x5000 holds the stale pre-write
+ * ciphertext (encryption of zeros), not the encryption of 0xBEEF.
+ */
+static void test_sev_sim_cbit_shared_view(void)
+{
+    QTestState *s;
+    gchar *args, *marker = NULL, *readback = NULL, *cipher = NULL;
+    int i;
+
+    make_disk(cbit_boot_sector);
+
+    args = g_strdup_printf(
+        "-accel tcg -machine pc -S "
+        "-display none -serial null "
+        "-cpu qemu64,phys-bits=52 "
+        "-object x86-sev-sim,id=sim0,cipher=identity,"
+        "key=0102030405060708090a0b0c0d0e0f10,cbitpos=51,"
+        "reduced-phys-bits=1 "
+        "-fda %s", disk_path);
+    s = qtest_init(args);
+    g_free(args);
+
+    qobject_unref(qtest_qmp(s, "{ 'execute': 'cont' }"));
+
+    /* Liveness: confirm the boot sector ran before judging the result. */
+    for (i = 0; i < 300; i++) {
+        g_autofree gchar *m = NULL;
+
+        dump_page_at(s, 0x8000, &m, NULL, NULL);
+        if (g_str_has_prefix(m, "3412")) {
+            marker = g_strdup(m);
+            break;
+        }
+        g_usleep(100000);
+    }
+    g_assert_cmpint(i, <, 300);
+    g_free(marker);
+
+    /*
+     * The shared read-back lands at 0x5000. With the identity cipher over key
+     * 0102..0f10, the ciphertext of 0xBEEF (ef be 00 00) at page 0x200000 is
+     * ee bc 03 04. A stale (un-flushed) backing would instead show the
+     * encryption of zeros: 01 02 03 04.
+     */
+    for (i = 0; i < 300; i++) {
+        g_autofree gchar *rb = NULL;
+
+        dump_page_at(s, 0x5000, &rb, NULL, NULL);
+        if (g_str_has_prefix(rb, "eebc0304")) {
+            readback = g_strdup(rb);
+            break;
+        }
+        g_usleep(100000);
+    }
+    g_assert_cmpint(i, <, 300);            /* shared read must see ciphertext */
+
+    /* It matches the encrypted page's ciphertext view, and is not plaintext. */
+    dump_page_at(s, 0x200000, NULL, &cipher, NULL);
+    g_assert(g_str_has_prefix(readback, "eebc0304"));
+    g_assert(g_str_has_prefix(cipher, "eebc0304"));
+    g_assert(!g_str_has_prefix(readback, "efbe0000"));
+
+    g_free(readback);
+    g_free(cipher);
+    qtest_quit(s);
+    unlink(disk_path);
+    g_free(disk_path);
+    disk_path = NULL;
+}
+
+/*
+ * Reverse-direction boot sector: same PAE layout as cbit_boot_sector (PD[1]
+ * private +C-bit, PD[2] shared, both -> PA 0x200000) but the payload writes
+ * the page privately first (0x1111 via the C-bit mapping, creating the owner
+ * working page), then writes 0xBEEF through the shared mapping (plaintext
+ * into the backing), invalidates the private TLB entry, and reads the page
+ * back privately. Gas-assembled (.code16/.code32); the 32-bit payload is:
+ *   mov $0x1111,%eax ; mov %eax,0x200000   # private write (creates wp)
+ *   mov $0xBEEF,%eax ; mov %eax,0x400000   # shared write (plaintext)
+ *   invlpg 0x200000                        # force a fresh private fill
+ *   mov 0x200000,%eax ; mov %eax,0x5000    # private read -> store
+ */
+static uint8_t cbit_reverse_boot_sector[512] = {
+    /* 0x00 */ 0xfa, 0x31, 0xc0, 0x8e, 0xd8, 0xb8, 0x34, 0x12,
+    /* 0x08 */ 0xa3, 0x00, 0x80, 0xb8, 0x00, 0x70, 0x8e, 0xc0,
+    /* 0x10 */ 0x31, 0xff, 0x66, 0x31, 0xc0, 0xb9, 0x00, 0x08,
+    /* 0x18 */ 0xfc, 0x66, 0xf3, 0xab, 0x26, 0x66, 0xc7, 0x06,
+    /* 0x20 */ 0x00, 0x00, 0x01, 0x10, 0x07, 0x00, 0x26, 0x66,
+    /* 0x28 */ 0xc7, 0x06, 0x00, 0x10, 0x83, 0x00, 0x00, 0x00,
+    /* 0x30 */ 0x26, 0x66, 0xc7, 0x06, 0x04, 0x10, 0x00, 0x00,
+    /* 0x38 */ 0x00, 0x00, 0x26, 0x66, 0xc7, 0x06, 0x08, 0x10,
+    /* 0x40 */ 0x83, 0x00, 0x20, 0x00, 0x26, 0x66, 0xc7, 0x06,
+    /* 0x48 */ 0x0c, 0x10, 0x00, 0x00, 0x08, 0x00, 0x26, 0x66,
+    /* 0x50 */ 0xc7, 0x06, 0x10, 0x10, 0x83, 0x00, 0x20, 0x00,
+    /* 0x58 */ 0x26, 0x66, 0xc7, 0x06, 0x14, 0x10, 0x00, 0x00,
+    /* 0x60 */ 0x00, 0x00, 0x0f, 0x01, 0x16, 0xd8, 0x7c, 0x66,
+    /* 0x68 */ 0xb8, 0x00, 0x00, 0x07, 0x00, 0x0f, 0x22, 0xd8,
+    /* 0x70 */ 0x0f, 0x20, 0xe0, 0x66, 0x83, 0xc8, 0x20, 0x0f,
+    /* 0x78 */ 0x22, 0xe0, 0x0f, 0x20, 0xc0, 0x66, 0x0d, 0x01,
+    /* 0x80 */ 0x00, 0x00, 0x80, 0x0f, 0x22, 0xc0, 0x66, 0xea,
+    /* 0x88 */ 0x8e, 0x7c, 0x00, 0x00, 0x08, 0x00, 0xb8, 0x10,
+    /* 0x90 */ 0x00, 0x00, 0x00, 0x8e, 0xd8, 0x8e, 0xc0, 0xb8,
+    /* 0x98 */ 0x11, 0x11, 0x00, 0x00, 0xa3, 0x00, 0x00, 0x20,
+    /* 0xa0 */ 0x00, 0xb8, 0xef, 0xbe, 0x00, 0x00, 0xa3, 0x00,
+    /* 0xa8 */ 0x00, 0x40, 0x00, 0x0f, 0x01, 0x3d, 0x00, 0x00,
+    /* 0xb0 */ 0x20, 0x00, 0xa1, 0x00, 0x00, 0x20, 0x00, 0xa3,
+    /* 0xb8 */ 0x00, 0x50, 0x00, 0x00, 0xf4, 0xeb, 0xfe, 0x90,
+    /* 0xc0 */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    /* 0xc8 */ 0xff, 0xff, 0x00, 0x00, 0x00, 0x9a, 0xcf, 0x00,
+    /* 0xd0 */ 0xff, 0xff, 0x00, 0x00, 0x00, 0x92, 0xcf, 0x00,
+    /* 0xd8 */ 0x17, 0x00, 0xc0, 0x7c, 0x00, 0x00, 0x00, 0x00,
+    [0x1fe] = 0x55, 0xaa,
+};
+
+/*
+ * Verify the reverse direction: a shared (C-bit=0) write to an
+ * already-encrypted page must NOT leave the guest's subsequent private
+ * (C-bit=1) read seeing either the stale private value or the shared
+ * plaintext. The engine marks the owner working page stale on the keyless
+ * access, so the next private fill re-decrypts the backing -- which now holds
+ * plaintext -- yielding garbage (SEV tampering semantics). With identity
+ * cipher over key 0102..0f10 at page 0x200000, the garbage is the
+ * "decryption" of the shared plaintext 0xBEEF: ee bc 03 04.
+ */
+static void test_sev_sim_cbit_shared_write(void)
+{
+    QTestState *s;
+    gchar *args, *marker = NULL, *readback = NULL;
+    int i;
+
+    make_disk(cbit_reverse_boot_sector);
+
+    args = g_strdup_printf(
+        "-accel tcg -machine pc -S "
+        "-display none -serial null "
+        "-cpu qemu64,phys-bits=52 "
+        "-object x86-sev-sim,id=sim0,cipher=identity,"
+        "key=0102030405060708090a0b0c0d0e0f10,cbitpos=51,"
+        "reduced-phys-bits=1 "
+        "-fda %s", disk_path);
+    s = qtest_init(args);
+    g_free(args);
+
+    qobject_unref(qtest_qmp(s, "{ 'execute': 'cont' }"));
+
+    for (i = 0; i < 300; i++) {
+        g_autofree gchar *m = NULL;
+
+        dump_page_at(s, 0x8000, &m, NULL, NULL);
+        if (g_str_has_prefix(m, "3412")) {
+            marker = g_strdup(m);
+            break;
+        }
+        g_usleep(100000);
+    }
+    g_assert_cmpint(i, <, 300);
+    g_free(marker);
+
+    /*
+     * The private read-back lands at 0x5000. It must be the garbage decryption
+     * of the shared plaintext (eebc0304), not the shared plaintext itself
+     * (efbe0000) and not the stale private value (11110000, which is what an
+     * un-staled working page would return).
+     */
+    for (i = 0; i < 300; i++) {
+        g_autofree gchar *rb = NULL;
+
+        dump_page_at(s, 0x5000, &rb, NULL, NULL);
+        if (g_str_has_prefix(rb, "eebc0304")) {
+            readback = g_strdup(rb);
+            break;
+        }
+        g_usleep(100000);
+    }
+    g_assert_cmpint(i, <, 300);
+
+    g_assert(g_str_has_prefix(readback, "eebc0304"));  /* garbage */
+    g_assert(!g_str_has_prefix(readback, "efbe0000")); /* not plaintext */
+    g_assert(!g_str_has_prefix(readback, "11110000")); /* not stale */
+
+    g_free(readback);
+    qtest_quit(s);
+    unlink(disk_path);
+    g_free(disk_path);
+    disk_path = NULL;
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -379,6 +580,10 @@ int main(int argc, char **argv)
                        test_sev_sim_cpuid);
         qtest_add_func("/memory-encryption/sev-sim-cbit",
                        test_sev_sim_cbit_encryption);
+        qtest_add_func("/memory-encryption/sev-sim-cbit-shared-view",
+                       test_sev_sim_cbit_shared_view);
+        qtest_add_func("/memory-encryption/sev-sim-cbit-shared-write",
+                       test_sev_sim_cbit_shared_write);
     }
 
     return g_test_run();

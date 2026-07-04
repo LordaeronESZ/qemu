@@ -405,6 +405,65 @@ int mem_enc_decrypt_buf(MemoryEncryptionEngine *e, RAMBlock *block,
     return ret;
 }
 
+/*
+ * Write each dirty owner-key working page in [@start, @end) back into the
+ * ciphertext backing, clearing dirty. Caller must hold e->lock. Only the
+ * owner-key working page can be dirty (the guest CPU writes its private memory
+ * with the owner key; other-key pages are read-only views), so this is what
+ * keeps the backing -- the source of truth observed by keyless readers -- from
+ * lagging behind in-cache owner writes.
+ */
+static void flush_range_locked(MemoryEncryptionEngine *e, RAMBlock *block,
+                               ram_addr_t start, ram_addr_t end)
+{
+    size_t psz = page_size_of(block);
+    ram_addr_t page_off;
+
+    for (page_off = start; page_off < end; page_off += psz) {
+        MemEncWorkKey k = { block, page_off / psz, e->owner_key_id };
+        MemEncWorkPage *wp = g_hash_table_lookup(e->working, &k);
+
+        if (wp && wp->dirty) {
+            if (encrypt_backing_page(e, block, page_off, wp->plain,
+                                     e->owner_key_id, NULL) == 0) {
+                wp->dirty = false;
+            }
+        }
+    }
+}
+
+/*
+ * A keyless access is about to observe or modify the raw backing of one
+ * managed page. Flush any dirty owner working page back into the ciphertext
+ * backing (so a keyless read sees the current contents) and then mark that
+ * working page un-populated, so a later keyed (C-bit) access re-decrypts the
+ * backing instead of reusing the cached plaintext. The working-page buffer
+ * stays allocated -- TLB addends still pointing at it remain valid (no
+ * use-after-free); they simply observe the re-decrypted contents once a fresh
+ * keyed fill repopulates it. After a keyless *write* has left plaintext in the
+ * backing, that re-decrypt yields garbage: the SEV "host tampering with
+ * private memory corrupts the guest's private view" semantics. Caller must
+ * hold e->lock.
+ */
+static void stale_owner_wp_locked(MemoryEncryptionEngine *e, RAMBlock *block,
+                                  ram_addr_t page_off)
+{
+    size_t psz = page_size_of(block);
+    MemEncWorkKey k = { block, page_off / psz, e->owner_key_id };
+    MemEncWorkPage *wp = g_hash_table_lookup(e->working, &k);
+
+    if (!wp) {
+        return;
+    }
+    if (wp->dirty) {
+        if (encrypt_backing_page(e, block, page_off, wp->plain,
+                                 e->owner_key_id, NULL) == 0) {
+            wp->dirty = false;
+        }
+    }
+    wp->populated = false;
+}
+
 /* ----------------------------------------------------------------------- */
 /* CPU hot path                                                             */
 /* ----------------------------------------------------------------------- */
@@ -432,8 +491,19 @@ uintptr_t mem_enc_translate(MemoryEncryptionEngine *e, CPUState *cs,
     if (key_id == MEM_ENC_KEY_NONE) {
         /*
          * Shared/host view: no key, so observe the raw backing directly
-         * (ciphertext for an encrypted page, plaintext otherwise).
+         * (ciphertext for an encrypted page, plaintext otherwise). For a
+         * managed page, flush the owner's dirty working page into the backing
+         * (so a keyless read sees the current ciphertext) and mark it stale,
+         * since this access may be a write that changes the backing -- the next
+         * keyed access must then re-decrypt, yielding garbage after a plaintext
+         * shared write (SEV tampering semantics).
          */
+        if (page_is_managed(e, block, ram_addr)) {
+            size_t psz = page_size_of(block);
+            ram_addr_t page_off = ram_addr & ~(psz - 1);
+
+            stale_owner_wp_locked(e, block, page_off);
+        }
         qemu_mutex_unlock(&e->lock);
         return addend;
     }
@@ -564,25 +634,9 @@ void mem_enc_flush(MemoryEncryptionEngine *e, RAMBlock *block,
     size_t psz = page_size_of(block);
     ram_addr_t start = offset & ~(psz - 1);
     ram_addr_t end = (offset + len + psz - 1) & ~(psz - 1);
-    ram_addr_t page_off;
 
-    /*
-     * Only the owner-key working page can be dirty (the guest CPU accesses its
-     * private memory with the owner key; wrong-key pages are read-only views).
-     * Write each dirty owner-key page back into the ciphertext backing.
-     */
     qemu_mutex_lock(&e->lock);
-    for (page_off = start; page_off < end; page_off += psz) {
-        MemEncWorkKey k = { block, page_off / psz, e->owner_key_id };
-        MemEncWorkPage *wp = g_hash_table_lookup(e->working, &k);
-
-        if (wp && wp->dirty) {
-            if (encrypt_backing_page(e, block, page_off, wp->plain,
-                                     e->owner_key_id, NULL) == 0) {
-                wp->dirty = false;
-            }
-        }
-    }
+    flush_range_locked(e, block, start, end);
     qemu_mutex_unlock(&e->lock);
 }
 
