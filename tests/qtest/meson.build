@@ -135,6 +135,10 @@ else
   dbus_vmstate1 = []
 endif
 
+if mem_encryption.allowed()
+  qtests_i386 += ['memory-encryption-test']
+endif
+
 qtests_x86_64 = qtests_i386
 
 qtests_alpha = ['boot-serial-test'] + \

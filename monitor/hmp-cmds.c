@@ -28,6 +28,10 @@
 #include "qapi/qapi-commands-control.h"
 #include "qapi/qapi-commands-machine.h"
 #include "qapi/qapi-commands-misc.h"
+#ifdef CONFIG_MEM_ENCRYPTION
+#include "qapi/qapi-commands-memory-encryption.h"
+#include "qapi/qapi-types-memory-encryption.h"
+#endif
 #include "qobject/qdict.h"
 #include "qemu/cutils.h"
 #include "qemu/log.h"
@@ -790,3 +794,64 @@ void hmp_gpa2hpa(Monitor *mon, const QDict *qdict)
     memory_region_unref(mr);
 }
 #endif
+
+void hmp_info_memory_encryption(Monitor *mon, const QDict *qdict)
+{
+#ifdef CONFIG_MEM_ENCRYPTION
+    Error *err = NULL;
+    MemoryEncryptionInfo *info = qmp_query_memory_encryption(&err);
+
+    if (hmp_handle_error(mon, err)) {
+        return;
+    }
+    if (!info->enabled) {
+        monitor_printf(mon, "memory encryption: disabled\n");
+    } else {
+        monitor_printf(mon, "memory encryption: enabled\n");
+        monitor_printf(mon, "  cipher:        %s\n",
+                       info->cipher ? info->cipher : "?");
+        monitor_printf(mon, "  owner key id:  %u\n", info->owner_key_id);
+        monitor_printf(mon, "  managed pages: %" PRId64 "\n",
+                       info->managed_pages);
+        monitor_printf(mon, "  working pages: %" PRId64 "\n",
+                       info->working_pages);
+    }
+    qapi_free_MemoryEncryptionInfo(info);
+#else
+    monitor_printf(mon, "memory encryption: not built in\n");
+#endif
+}
+
+void hmp_memory_encryption_dump_page(Monitor *mon, const QDict *qdict)
+{
+#ifdef CONFIG_MEM_ENCRYPTION
+    Error *err = NULL;
+    uint64_t phys = qdict_get_int(qdict, "phys");
+    MemoryEncryptionPage *p = qmp_memory_encryption_dump_page(phys, &err);
+
+    if (hmp_handle_error(mon, err)) {
+        return;
+    }
+    monitor_printf(mon, "phys=0x%" PRIx64 " managed=%s\n",
+                   p->phys, p->managed ? "yes" : "no");
+    monitor_printf(mon, "plaintext:  %s\n", p->plaintext_hex);
+    monitor_printf(mon, "ciphertext: %s\n", p->ciphertext_hex);
+    qapi_free_MemoryEncryptionPage(p);
+#else
+    monitor_printf(mon, "memory encryption: not built in\n");
+#endif
+}
+
+void hmp_memory_encryption_mark_managed(Monitor *mon, const QDict *qdict)
+{
+#ifdef CONFIG_MEM_ENCRYPTION
+    Error *err = NULL;
+    uint64_t phys = qdict_get_int(qdict, "phys");
+    uint64_t size = qdict_get_int(qdict, "size");
+
+    qmp_memory_encryption_mark_managed(phys, size, &err);
+    hmp_handle_error(mon, err);
+#else
+    monitor_printf(mon, "memory encryption: not built in\n");
+#endif
+}

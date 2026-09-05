@@ -831,6 +831,34 @@ SRST
 ERST
 
     {
+        .name       = "memory-encryption-dump-page",
+        .args_type  = "phys:l",
+        .params     = "phys",
+        .help       = "dump the plaintext and ciphertext views of one page",
+        .cmd        = hmp_memory_encryption_dump_page,
+    },
+
+SRST
+``memory-encryption-dump-page`` *phys*
+  Dump the plaintext and ciphertext views of the
+  page at physical address *phys*.
+ERST
+
+    {
+        .name       = "memory-encryption-mark-managed",
+        .args_type  = "phys:l,size:l",
+        .params     = "phys size",
+        .help       = "mark a page range as managed",
+        .cmd        = hmp_memory_encryption_mark_managed,
+    },
+
+SRST
+``memory-encryption-mark-managed`` *phys* *size*
+  Mark the range [*phys*, *phys* + *size*) as managed: encrypt its current
+  plaintext contents into the ciphertext backing.
+ERST
+
+    {
         .name       = "boot_set",
         .args_type  = "bootdevice:s",
         .params     = "bootdevice",

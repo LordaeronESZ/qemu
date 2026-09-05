@@ -32,6 +32,19 @@ SRST
 ERST
 
     {
+        .name       = "memory-encryption",
+        .args_type  = "",
+        .params     = "",
+        .help       = "show the generic memory-encryption engine status",
+        .cmd        = hmp_info_memory_encryption,
+    },
+
+SRST
+  ``info memory-encryption``
+    Show the status of the generic memory-encryption engine.
+ERST
+
+    {
         .name       = "network",
         .args_type  = "",
         .params     = "",

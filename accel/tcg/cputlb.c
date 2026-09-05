@@ -31,6 +31,9 @@
 #include "exec/cputlb.h"
 #include "exec/tb-flush.h"
 #include "system/ramblock.h"
+#ifdef CONFIG_MEM_ENCRYPTION
+#include "system/memory-encryption.h"
+#endif
 #include "exec/mmu-access-type.h"
 #include "exec/tlb-common.h"
 #include "exec/vaddr.h"
@@ -1072,6 +1075,21 @@ void tlb_set_page_full(CPUState *cpu, int mmu_idx,
         /* I/O does not; force the host address to NULL. */
         addend = 0;
     }
+
+#ifdef CONFIG_MEM_ENCRYPTION
+    /*
+     * Opt-in memory-encryption redirect: when an engine is active, hand it the
+     * chance to point this RAM page's TLB addend at a decrypted working page
+     * instead of the ciphertext backing.
+     */
+    if (is_ram) {
+        MemoryEncryptionEngine *eng = mem_enc_get();
+        if (unlikely(eng != NULL)) {
+            addend = mem_enc_translate(eng, cpu, section, paddr_page, xlat,
+                                       full->attrs, addend);
+        }
+    }
+#endif
 
     write_flags = read_flags;
     if (is_ram) {

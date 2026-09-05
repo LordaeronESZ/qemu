@@ -10,6 +10,15 @@ system_ss.add([files(
   'confidential-guest-support.c',
 ), numa])
 
+if mem_encryption.allowed()
+    system_ss.add(files(
+        'memory-encryption-cipher.c',
+        'memory-encryption.c',
+        'memory-encryption-generic.c',
+        'memory-encryption-qmp.c',
+    ))
+endif
+
 if host_os != 'windows'
   system_ss.add(files('rng-random.c'))
   if host_os != 'emscripten'

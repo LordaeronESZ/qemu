@@ -1180,6 +1180,26 @@
             '*node-affinity': ['uint16'] } }
 
 ##
+# @MemoryEncryptionCoreGenericProperties:
+#
+# Properties for memory-encryption-core-generic objects, the default
+# software memory-encryption backend.
+#
+# @cipher: the cipher to use for page encryption (default: "identity")
+#
+# @key: the owner key, as a hex string
+#
+# @owner-key-id: the key id of the owner key (default: 1)
+#
+# Since: 11.1
+##
+{ 'struct': 'MemoryEncryptionCoreGenericProperties',
+  'data': { '*cipher': 'str',
+            '*key': 'str',
+            '*owner-key-id': 'uint32' },
+  'if': 'CONFIG_MEM_ENCRYPTION' }
+
+##
 # @ObjectType:
 #
 # Features:
@@ -1229,6 +1249,8 @@
     'memory-backend-ram',
     { 'name': 'memory-backend-shm',
       'if': 'CONFIG_POSIX' },
+    { 'name': 'memory-encryption-core-generic',
+      'if': 'CONFIG_MEM_ENCRYPTION' },
     'pef-guest',
     { 'name': 'pr-manager-helper',
       'if': 'CONFIG_LINUX' },
@@ -1307,6 +1329,8 @@
       'memory-backend-ram':         'MemoryBackendProperties',
       'memory-backend-shm':         { 'type': 'MemoryBackendShmProperties',
                                       'if': 'CONFIG_POSIX' },
+      'memory-encryption-core-generic': { 'type': 'MemoryEncryptionCoreGenericProperties',
+                                         'if': 'CONFIG_MEM_ENCRYPTION' },
       'pr-manager-helper':          { 'type': 'PrManagerHelperProperties',
                                       'if': 'CONFIG_LINUX' },
       'qtest':                      'QtestProperties',
