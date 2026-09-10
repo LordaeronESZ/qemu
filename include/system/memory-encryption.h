@@ -72,6 +72,8 @@ void mem_enc_flush(MemoryEncryptionEngine *eng, RAMBlock *block,
 void mem_enc_invalidate(MemoryEncryptionEngine *eng, RAMBlock *block,
                         ram_addr_t offset, size_t len);
 
+void mem_enc_flush_and_invalidate_all(MemoryEncryptionEngine *eng);
+
 void mem_enc_get_stats(MemoryEncryptionEngine *eng, uint64_t *managed_pages,
                        uint64_t *working_pages, const char **cipher_name);
 

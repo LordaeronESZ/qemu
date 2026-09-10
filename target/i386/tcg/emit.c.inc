@@ -4676,6 +4676,11 @@ static void gen_VZEROUPPER(DisasContext *s, X86DecodedInsn *decode)
     }
 }
 
+static void gen_WBINVD(DisasContext *s, X86DecodedInsn *decode)
+{
+    gen_helper_wbinvd(tcg_env);
+}
+
 static void gen_WAIT(DisasContext *s, X86DecodedInsn *decode)
 {
     if ((s->flags & (HF_MP_MASK | HF_TS_MASK)) == (HF_MP_MASK | HF_TS_MASK)) {

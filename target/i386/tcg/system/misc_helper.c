@@ -27,6 +27,9 @@
 #include "exec/cputlb.h"
 #include "tcg/helper-tcg.h"
 #include "hw/i386/apic.h"
+#ifdef CONFIG_MEM_ENCRYPTION
+#include "system/memory-encryption.h"
+#endif
 
 void helper_outb(CPUX86State *env, uint32_t port, uint32_t data)
 {
@@ -504,6 +507,24 @@ void helper_rdmsr(CPUX86State *env)
 void helper_flush_page(CPUX86State *env, target_ulong addr)
 {
     tlb_flush_page(env_cpu(env), addr);
+}
+
+void helper_wbinvd(CPUX86State *env)
+{
+#ifdef CONFIG_MEM_ENCRYPTION
+    MemoryEncryptionEngine *eng = mem_enc_get();
+
+    if (eng) {
+        mem_enc_flush_and_invalidate_all(eng);
+        /*
+         * Inconsistency with physical instruction semantics:
+         * We must flush the TLB here to prevent subsequent memory accesses
+         * from reading a working page that has already been freed (invalidated).
+         */
+        tlb_flush(env_cpu(env));
+        tlb_flush_all_cpus_synced(env_cpu(env));
+    }
+#endif
 }
 
 G_NORETURN void helper_hlt(CPUX86State *env)

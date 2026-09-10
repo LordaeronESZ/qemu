@@ -494,6 +494,38 @@ void mem_enc_flush(MemoryEncryptionEngine *e, RAMBlock *block,
     qemu_mutex_unlock(&e->lock);
 }
 
+static void flush_all_work_page(gpointer key, gpointer value,
+                                gpointer user_data)
+{
+    MemEncWorkPage *wp = value;
+    FlushCtx *c = user_data;
+
+    if (!wp->dirty) {
+        return;
+    }
+
+    ram_addr_t page_off = wp->key.page_idx * page_size_of(wp->key.block);
+    if (encrypt_backing_page(c->e, wp->key.block, page_off, wp->plain,
+                             wp->key.key_id, NULL) == 0) {
+        wp->dirty = false;
+    }
+}
+
+/*
+ * The composition of mem_enc_flush() and mem_enc_invalidate() over all
+ * pages: write back every dirty working page (any key, any block), then
+ * drop the whole working-page cache.
+ */
+void mem_enc_flush_and_invalidate_all(MemoryEncryptionEngine *e)
+{
+    FlushCtx c = { .e = e, .block = NULL, 0, 0 };
+
+    qemu_mutex_lock(&e->lock);
+    g_hash_table_foreach(e->working, flush_all_work_page, &c);
+    g_hash_table_remove_all(e->working);
+    qemu_mutex_unlock(&e->lock);
+}
+
 typedef struct InvalidateCtx {
     RAMBlock *block;
     uint64_t start_idx;
