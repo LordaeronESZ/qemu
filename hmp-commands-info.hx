@@ -44,6 +44,23 @@ SRST
     Show the status of the generic memory-encryption engine.
 ERST
 
+#if defined(TARGET_I386)
+    {
+        .name       = "sme",
+        .args_type  = "",
+        .params     = "",
+        .help       = "show AMD SME CPU visibility status (C-bit, SYSCFG, engine)",
+        .cmd        = hmp_info_sme,
+    },
+
+SRST
+  ``info sme``
+    Show the AMD SME CPU-side state: the ``sme`` CPU property, the C-bit
+    position, the SYSCFG memory-encryption enable bit and the state of
+    the generic memory-encryption engine.
+ERST
+#endif
+
     {
         .name       = "network",
         .args_type  = "",

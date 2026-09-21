@@ -27,6 +27,7 @@
 #include "exec/cputlb.h"
 #include "tcg/helper-tcg.h"
 #include "hw/i386/apic.h"
+#include "mem-enc-sme.h"
 #ifdef CONFIG_MEM_ENCRYPTION
 #include "system/memory-encryption.h"
 #endif
@@ -211,6 +212,14 @@ void helper_wrmsr(CPUX86State *env)
         }
         env->vm_hsave = val;
         break;
+#ifdef CONFIG_MEM_ENCRYPTION
+    case MSR_AMD64_SYSCFG:
+        env->msr_syscfg = val;
+        break;
+    case MSR_AMD64_SEV:
+        /* Read-only, always 0: SEV is not active under this simulation. */
+        break;
+#endif
 #ifdef TARGET_X86_64
     case MSR_LSTAR:
         env->lstar = val;
@@ -364,6 +373,14 @@ void helper_rdmsr(CPUX86State *env)
     case MSR_VM_HSAVE_PA:
         val = env->vm_hsave;
         break;
+#ifdef CONFIG_MEM_ENCRYPTION
+    case MSR_AMD64_SYSCFG:
+        val = env->msr_syscfg;
+        break;
+    case MSR_AMD64_SEV:
+        val = 0;
+        break;
+#endif
     case MSR_IA32_PERF_STATUS:
         /* tsc_increment_by_tick */
         val = 1000ULL;
@@ -507,6 +524,14 @@ void helper_rdmsr(CPUX86State *env)
 void helper_flush_page(CPUX86State *env, target_ulong addr)
 {
     tlb_flush_page(env_cpu(env), addr);
+}
+
+void helper_clflush(CPUX86State *env, target_ulong addr)
+{
+#ifdef CONFIG_MEM_ENCRYPTION
+    /* Page-granular write-back-and-invalidate for the encryption engine. */
+    x86_sme_clflush(env_cpu(env), addr);
+#endif
 }
 
 void helper_wbinvd(CPUX86State *env)

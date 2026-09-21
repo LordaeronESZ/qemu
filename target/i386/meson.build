@@ -20,6 +20,7 @@ i386_system_ss.add(files(
   'arch_dump.c',
   'arch_memory_mapping.c',
   'machine.c',
+  'mem-enc-sme.c',
   'monitor.c',
   'cpu-apic.c',
   'cpu-system.c',

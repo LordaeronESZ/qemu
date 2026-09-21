@@ -62,6 +62,18 @@ int mem_enc_read(MemoryEncryptionEngine *eng, RAMBlock *block,
                  ram_addr_t offset, void *dst, size_t len, uint32_t key_id,
                  Error **errp);
 
+int mem_enc_read_auto(MemoryEncryptionEngine *eng, hwaddr paddr,
+                      RAMBlock *block, ram_addr_t offset, void *dst,
+                      size_t len, Error **errp);
+
+/*
+ * Resolve @paddr to its backing block and the page-aligned offset of the
+ * containing page.
+ * Returns false for addresses not backed by RAM.
+ */
+bool mem_enc_paddr_to_page(hwaddr paddr, RAMBlock **block,
+                           ram_addr_t *page_offset);
+
 int mem_enc_write(MemoryEncryptionEngine *eng, RAMBlock *block,
                   ram_addr_t offset, const void *src, size_t len,
                   uint32_t key_id, Error **errp);
@@ -71,6 +83,10 @@ void mem_enc_flush(MemoryEncryptionEngine *eng, RAMBlock *block,
 
 void mem_enc_invalidate(MemoryEncryptionEngine *eng, RAMBlock *block,
                         ram_addr_t offset, size_t len);
+
+void mem_enc_flush_and_invalidate(MemoryEncryptionEngine *eng,
+                                  RAMBlock *block, ram_addr_t offset,
+                                  size_t len);
 
 void mem_enc_flush_and_invalidate_all(MemoryEncryptionEngine *eng);
 

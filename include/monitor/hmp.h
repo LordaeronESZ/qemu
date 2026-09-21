@@ -51,6 +51,7 @@ void hmp_cpu(Monitor *mon, const QDict *qdict);
 void hmp_memsave(Monitor *mon, const QDict *qdict);
 void hmp_pmemsave(Monitor *mon, const QDict *qdict);
 void hmp_info_memory_encryption(Monitor *mon, const QDict *qdict);
+void hmp_info_sme(Monitor *mon, const QDict *qdict);
 void hmp_memory_encryption_dump_page(Monitor *mon, const QDict *qdict);
 void hmp_memory_encryption_mark_managed(Monitor *mon, const QDict *qdict);
 void hmp_ringbuf_write(Monitor *mon, const QDict *qdict);

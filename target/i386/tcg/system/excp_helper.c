@@ -26,6 +26,7 @@
 #include "exec/target_page.h"
 #include "exec/tlb-flags.h"
 #include "tcg/helper-tcg.h"
+#include "mem-enc-sme.h"
 
 typedef struct TranslateParams {
     target_ulong addr;
@@ -620,14 +621,19 @@ bool x86_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
 
     if (get_physical_address(env, addr, access_type, mmu_idx, &out, &err,
                              retaddr)) {
+        MemTxAttrs attrs = cpu_get_mem_attrs(env);
+
         /*
          * Even if 4MB pages, we map only one 4KB page in the cache to
          * avoid filling it too fast.
          */
         assert(out.prot & (1 << access_type));
+#ifdef CONFIG_MEM_ENCRYPTION
+        x86_sme_fill_adjust(cs, &out.paddr, &attrs);
+#endif
         tlb_set_page_with_attrs(cs, addr & TARGET_PAGE_MASK,
                                 out.paddr & TARGET_PAGE_MASK,
-                                cpu_get_mem_attrs(env),
+                                attrs,
                                 out.prot, mmu_idx, out.page_size);
         return true;
     }

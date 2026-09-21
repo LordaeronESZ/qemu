@@ -137,6 +137,7 @@ endif
 
 if mem_encryption.allowed()
   qtests_i386 += ['memory-encryption-test']
+  qtests_i386 += ['sme-cpuid-test']
 endif
 
 qtests_x86_64 = qtests_i386

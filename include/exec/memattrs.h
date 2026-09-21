@@ -46,6 +46,10 @@ typedef struct MemTxAttrs {
     unsigned int memory:1;
     /* Debug access that can even write to ROM. */
     unsigned int debug:1;
+    /*
+     * x86: memory encryption access
+     */
+    unsigned int encrypted:1;
     /* Requester ID (for MSI for example) */
     unsigned int requester_id:16;
 

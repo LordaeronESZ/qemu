@@ -10,13 +10,14 @@
 #include "qapi/error.h"
 #include "qemu/bitops.h"
 #include "exec/target_page.h"
+#include "system/address-spaces.h"
 #include "system/memory-encryption.h"
 #include "system/memory-encryption-cipher.h"
 
 typedef struct MemEncManagedBlock {
     RAMBlock *block;
     size_t num_pages;
-    unsigned long *managed_bmap; /* bit per page: backing holds ciphertext */
+    unsigned long *managed_bmap; /* bit per page: pre-encrypted */
 } MemEncManagedBlock;
 
 typedef struct MemEncWorkKey {
@@ -182,13 +183,29 @@ static int encrypt_backing_page(MemoryEncryptionEngine *e, RAMBlock *block,
                                   in, block->host + page_off, psz, errp);
 }
 
+static uint32_t default_key_resolver(MemoryEncryptionEngine *e,
+                                     CPUState *cs, hwaddr paddr,
+                                     MemTxAttrs attrs)
+{
+    RAMBlock *block;
+    ram_addr_t page_off;
+
+    if (!mem_enc_paddr_to_page(paddr, &block, &page_off)) {
+        return MEM_ENC_KEY_NONE;
+    }
+    if (!page_is_managed(e, block, page_off)) {
+        return MEM_ENC_KEY_NONE;
+    }
+    return e->owner_key_id;
+}
+
 static uint32_t resolve_key_id(MemoryEncryptionEngine *e, CPUState *cs,
                                hwaddr paddr, MemTxAttrs attrs)
 {
     if (e->key_resolver) {
         return e->key_resolver(e, cs, paddr, attrs);
     }
-    return e->owner_key_id;
+    return default_key_resolver(e, cs, paddr, attrs);
 }
 
 /*
@@ -199,6 +216,15 @@ static uint32_t resolve_key_id(MemoryEncryptionEngine *e, CPUState *cs,
 static void cipher_free_value(gpointer data)
 {
     mem_enc_cipher_free(data);
+}
+
+/* GDestroyNotify for the managed table; frees both per-block bitmaps. */
+static void managed_block_free(gpointer data)
+{
+    MemEncManagedBlock *mb = data;
+
+    g_free(mb->managed_bmap);
+    g_free(mb);
 }
 
 MemoryEncryptionEngine *mem_enc_engine_new(const char *cipher_name,
@@ -212,7 +238,7 @@ MemoryEncryptionEngine *mem_enc_engine_new(const char *cipher_name,
     e->ciphers = g_hash_table_new_full(g_direct_hash, g_direct_equal,
                                        NULL, cipher_free_value);
     e->managed = g_hash_table_new_full(g_direct_hash, g_direct_equal,
-                                       NULL, g_free);
+                                       NULL, managed_block_free);
     e->working = g_hash_table_new_full(work_hash, work_equal,
                                        g_free, work_free);
     return e;
@@ -300,18 +326,15 @@ int mem_enc_mark_managed(MemoryEncryptionEngine *e, RAMBlock *block,
 
     qemu_mutex_lock(&e->lock);
 
-    /*
-     * Encrypt the current plaintext contents into the ciphertext backing,
-     * then mark the pages managed.
-     */
     for (page_off = offset; page_off < end; page_off += psz) {
+        if (page_is_managed(e, block, page_off)) {
+            continue;
+        }
         if (encrypt_backing_page(e, block, page_off, block->host + page_off,
                                  e->owner_key_id, errp) < 0) {
             qemu_mutex_unlock(&e->lock);
             return -1;
         }
-    }
-    for (page_off = offset; page_off < end; page_off += psz) {
         set_page_managed(e, block, page_off);
     }
 
@@ -339,14 +362,8 @@ uintptr_t mem_enc_translate(MemoryEncryptionEngine *e, CPUState *cs,
 
     qemu_mutex_lock(&e->lock);
 
-    if (!page_is_managed(e, block, ram_addr)) {
-        qemu_mutex_unlock(&e->lock);
-        return addend; /* unmanaged: plaintext backing, normal path */
-    }
-
     key_id = resolve_key_id(e, cs, paddr, attrs);
     if (key_id == MEM_ENC_KEY_NONE) {
-        /* No key: the CPU observes the raw ciphertext backing. */
         qemu_mutex_unlock(&e->lock);
         return addend;
     }
@@ -359,7 +376,16 @@ uintptr_t mem_enc_translate(MemoryEncryptionEngine *e, CPUState *cs,
         wp = work_create(e, block, page_idx, key_id);
     }
     if (!wp->populated) {
-        if (decrypt_backing_page(e, block, page_idx * page_size_of(block),
+        size_t psz = page_size_of(block);
+        ram_addr_t page_off = page_idx * psz;
+
+        /* Defensive: out-of-range or hostless blocks stay pass-through. */
+        if (!block->host || page_off + psz > block->max_length) {
+            qemu_mutex_unlock(&e->lock);
+            return addend;
+        }
+
+        if (decrypt_backing_page(e, block, page_off,
                                  wp->plain, key_id, NULL) < 0) {
             qemu_mutex_unlock(&e->lock);
             return addend;
@@ -376,6 +402,19 @@ uintptr_t mem_enc_translate(MemoryEncryptionEngine *e, CPUState *cs,
     return (uintptr_t)wp->plain;
 }
 
+int mem_enc_read_auto(MemoryEncryptionEngine *e, hwaddr paddr,
+                      RAMBlock *block, ram_addr_t offset, void *dst,
+                      size_t len, Error **errp)
+{
+    uint32_t key_id;
+
+    qemu_mutex_lock(&e->lock);
+    key_id = resolve_key_id(e, NULL, paddr, (MemTxAttrs){ 0 });
+    qemu_mutex_unlock(&e->lock);
+
+    return mem_enc_read(e, block, offset, dst, len, key_id, errp);
+}
+
 /* Access memory using a specific key_id, do not touch working page */
 int mem_enc_read(MemoryEncryptionEngine *e, RAMBlock *block,
                  ram_addr_t offset, void *dst, size_t len, uint32_t key_id,
@@ -386,7 +425,7 @@ int mem_enc_read(MemoryEncryptionEngine *e, RAMBlock *block,
 
     qemu_mutex_lock(&e->lock);
 
-    if (!page_is_managed(e, block, offset) || key_id == MEM_ENC_KEY_NONE) {
+    if (key_id == MEM_ENC_KEY_NONE) {
         memcpy(dst, block->host + offset, len);
         qemu_mutex_unlock(&e->lock);
         return 0;
@@ -419,7 +458,7 @@ int mem_enc_write(MemoryEncryptionEngine *e, RAMBlock *block,
 
     qemu_mutex_lock(&e->lock);
 
-    if (!page_is_managed(e, block, offset) || key_id == MEM_ENC_KEY_NONE) {
+    if (key_id == MEM_ENC_KEY_NONE) {
         memcpy(block->host + offset, src, len);
         qemu_mutex_unlock(&e->lock);
         return 0;
@@ -511,11 +550,13 @@ static void flush_all_work_page(gpointer key, gpointer value,
     }
 }
 
-/*
- * The composition of mem_enc_flush() and mem_enc_invalidate() over all
- * pages: write back every dirty working page (any key, any block), then
- * drop the whole working-page cache.
- */
+void mem_enc_flush_and_invalidate(MemoryEncryptionEngine *e, RAMBlock *block,
+                                  ram_addr_t offset, size_t len)
+{
+    mem_enc_flush(e, block, offset, len);
+    mem_enc_invalidate(e, block, offset, len);
+}
+
 void mem_enc_flush_and_invalidate_all(MemoryEncryptionEngine *e)
 {
     FlushCtx c = { .e = e, .block = NULL, 0, 0 };
@@ -524,6 +565,26 @@ void mem_enc_flush_and_invalidate_all(MemoryEncryptionEngine *e)
     g_hash_table_foreach(e->working, flush_all_work_page, &c);
     g_hash_table_remove_all(e->working);
     qemu_mutex_unlock(&e->lock);
+}
+
+bool mem_enc_paddr_to_page(hwaddr paddr, RAMBlock **block_out,
+                           ram_addr_t *page_offset)
+{
+    hwaddr xlat, len = 1;
+    MemoryRegion *mr;
+    RAMBlock *block;
+    ram_addr_t ra;
+
+    mr = address_space_translate(&address_space_memory, paddr, &xlat, &len,
+                                 false, MEMTXATTRS_UNSPECIFIED);
+    if (!mr || !mr->ram_block) {
+        return false;
+    }
+    block = mr->ram_block;
+    ra = memory_region_get_ram_addr(mr) + xlat;
+    *block_out = block;
+    *page_offset = ra & ~(qemu_target_page_size() - 1);
+    return true;
 }
 
 typedef struct InvalidateCtx {

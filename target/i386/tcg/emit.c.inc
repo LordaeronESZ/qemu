@@ -4681,6 +4681,16 @@ static void gen_WBINVD(DisasContext *s, X86DecodedInsn *decode)
     gen_helper_wbinvd(tcg_env);
 }
 
+static void gen_CLFLUSH(DisasContext *s, X86DecodedInsn *decode)
+{
+    gen_helper_clflush(tcg_env, s->A0);
+}
+
+static void gen_CLFLUSHOPT(DisasContext *s, X86DecodedInsn *decode)
+{
+    gen_helper_clflush(tcg_env, s->A0);
+}
+
 static void gen_WAIT(DisasContext *s, X86DecodedInsn *decode)
 {
     if ((s->flags & (HF_MP_MASK | HF_TS_MASK)) == (HF_MP_MASK | HF_TS_MASK)) {

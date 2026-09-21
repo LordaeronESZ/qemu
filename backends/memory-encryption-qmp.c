@@ -116,8 +116,8 @@ MemoryEncryptionPage *qmp_memory_encryption_dump_page(uint64_t phys,
      * The plaintext view is what the guest CPU sees: decrypted with the owner
      * key for managed pages, raw for unmanaged pages.
      */
-    if (mem_enc_read(eng, block, ram_addr, plain, psz,
-                     mem_enc_owner_key_id(eng), errp) < 0) {
+    if (mem_enc_read_auto(eng, phys, block, ram_addr, plain, psz,
+                          errp) < 0) {
         return NULL;
     }
 

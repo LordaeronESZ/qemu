@@ -31,6 +31,46 @@
 #include "qapi/error.h"
 #include "qapi/qapi-commands-misc.h"
 #include "system/memory.h"
+#ifdef CONFIG_MEM_ENCRYPTION
+#include "system/memory-encryption.h"
+#endif
+
+void hmp_info_sme(Monitor *mon, const QDict *qdict)
+{
+#ifdef CONFIG_MEM_ENCRYPTION
+    X86CPU *cpu = X86_CPU(first_cpu);
+
+    if (!cpu) {
+        monitor_printf(mon, "No CPU present\n");
+        return;
+    }
+
+    monitor_printf(mon, "CPU SME support: %s\n", cpu->sme ? "yes" : "no");
+    if (cpu->sme) {
+        monitor_printf(mon, "  C-bit position: %u\n", cpu->sme_c_bit);
+        monitor_printf(mon, "  SYSCFG.MemEncryptEn: %s\n",
+                       (cpu->env.msr_syscfg & MSR_AMD64_SYSCFG_MEM_ENCRYPT)
+                       ? "set" : "clear");
+        monitor_printf(mon, "  hypervisor CPUID bit: %s\n",
+                       (cpu->env.features[FEAT_1_ECX] & CPUID_EXT_HYPERVISOR)
+                       ? "set (guests will refuse to enable SME)" : "clear");
+    }
+
+    if (mem_enc_get()) {
+        uint64_t managed = 0, working = 0;
+        const char *cipher = NULL;
+
+        mem_enc_get_stats(mem_enc_get(), &managed, &working, &cipher);
+        monitor_printf(mon, "encryption engine: active (cipher=%s, "
+                       "managed-pages=%" PRIu64 ", working-pages=%" PRIu64
+                       ")\n", cipher ? cipher : "?", managed, working);
+    } else {
+        monitor_printf(mon, "encryption engine: not instantiated\n");
+    }
+#else
+    monitor_printf(mon, "SME: not built in\n");
+#endif
+}
 
 /* Perform linear address sign extension */
 static hwaddr addr_canonical(CPUArchState *env, hwaddr addr)

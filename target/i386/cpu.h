@@ -566,6 +566,14 @@ typedef enum X86Seg {
 
 #define MSR_K7_HWCR                     0xc0010015
 
+#define MSR_AMD64_SYSCFG                0xc0010010
+#define MSR_AMD64_SYSCFG_MEM_ENCRYPT_BIT 23
+#define MSR_AMD64_SYSCFG_MEM_ENCRYPT    \
+    BIT_ULL(MSR_AMD64_SYSCFG_MEM_ENCRYPT_BIT)
+
+/* AMD Secure Encrypted Virtualization status (read-only here, always 0) */
+#define MSR_AMD64_SEV                   0xc0010131
+
 #define MSR_VM_HSAVE_PA                 0xc0010117
 
 #define MSR_IA32_XFD                    0x000001c4
@@ -2173,6 +2181,8 @@ typedef struct CPUArchState {
     /* AMD MSRC001_0015 Hardware Configuration */
     uint64_t msr_hwcr;
 
+    uint64_t msr_syscfg;
+
     /* exception/interrupt handling */
     int error_code;
     int exception_is_int;
@@ -2492,6 +2502,11 @@ struct ArchCPU {
      * even if the host cpu supports more physical address bits.
      */
     uint32_t guest_phys_bits;
+
+#ifdef CONFIG_MEM_ENCRYPTION
+    bool sme;
+    uint32_t sme_c_bit;
+#endif
 
     /* in order to simplify APIC support, we leave this pointer to the
        user */

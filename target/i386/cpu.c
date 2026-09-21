@@ -23,6 +23,7 @@
 #include "qemu/qemu-print.h"
 #include "qemu/hw-version.h"
 #include "cpu.h"
+#include "mem-enc-sme.h"
 #include "tcg/helper-tcg.h"
 #include "exec/translation-block.h"
 #include "system/hvf.h"
@@ -9127,6 +9128,13 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
             *ebx = sev_get_cbit_position() & 0x3f; /* EBX[5:0] */
             *ebx |= (sev_get_reduced_phys_bits() & 0x3f) << 6; /* EBX[11:6] */
         }
+#ifdef CONFIG_MEM_ENCRYPTION
+        else if (cpu->sme) {
+            *eax = 0x1;               /* EAX bit0: SME support */
+            *ebx = cpu->sme_c_bit & 0x3f; /* EBX[5:0]: C-bit position */
+            *ebx |= BIT(31);          /* EBX bit31: no secure firmware */
+        }
+#endif
         break;
     case 0x80000021:
         *eax = *ebx = *ecx = *edx = 0;
@@ -9234,6 +9242,16 @@ static void x86_cpu_reset_hold(Object *obj, ResetType type)
     env->a20_mask = ~0x0;
     env->smbase = 0x30000;
     env->msr_smi_count = 0;
+
+#ifdef CONFIG_MEM_ENCRYPTION
+    /*
+     * SYSCFG.MemEncryptEn is BIOS-set on real hardware and only read by the
+     * kernel; preset it on reset when the SME CPU property is on.
+     */
+    if (cpu->sme) {
+        env->msr_syscfg = MSR_AMD64_SYSCFG_MEM_ENCRYPT;
+    }
+#endif
 
     env->idt.limit = 0xffff;
     env->gdt.limit = 0xffff;
@@ -10105,6 +10123,41 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
         }
     }
 
+#ifdef CONFIG_MEM_ENCRYPTION
+    if (cpu->sme) {
+        if (kvm_enabled()) {
+            error_setg(errp, "sme=on is only supported with the TCG "
+                       "accelerator (generic memory-encryption engine)");
+            return;
+        }
+        if (!IS_AMD_CPU(env)) {
+            /* The kernel's sme_enable() checks CPUID.0x8000001f, not the
+             * vendor string, so this remains functional -- but SME is an
+             * AMD feature and reporting it under another vendor is odd. */
+            warn_report("sme=on on a non-AMD vendor CPU model");
+        }
+        if (cpu->sme_c_bit < 1 || cpu->sme_c_bit >= cpu->phys_bits) {
+            error_setg(errp, "sme-c-bit (%u) must be within the physical "
+                       "address bits (1..%u); use e.g. phys-bits=48 with "
+                       "the default C-bit position 47",
+                       cpu->sme_c_bit, cpu->phys_bits - 1);
+            return;
+        }
+        /*
+         * The kernel refuses to enable SME when CPUID.1 ECX
+         * bit31 (hypervisor) is set.
+         */
+        if (env->features[FEAT_1_ECX] & CPUID_EXT_HYPERVISOR) {
+            warn_report("sme=on with the default hypervisor CPUID bit set; "
+                        "guest kernels will refuse to enable SME. Consider "
+                        "\"-cpu ...,sme=on,-hypervisor\".");
+        }
+
+        /* Install the C-bit key resolver on the active engine (if any). */
+        x86_sme_cpu_realize(CPU(cpu));
+    }
+#endif
+
     /* Cache information initialization */
     if (!cpu->legacy_cache) {
         const CPUCaches *cache_info = xcc->model
@@ -10558,6 +10611,10 @@ static const Property x86_cpu_properties[] = {
     DEFINE_PROP_INT32("node-id", X86CPU, node_id, CPU_UNSET_NUMA_NODE_ID),
     DEFINE_PROP_BOOL("pmu", X86CPU, enable_pmu, false),
     DEFINE_PROP_UINT64_CHECKMASK("lbr-fmt", X86CPU, lbr_fmt, PERF_CAP_LBR_FMT),
+#ifdef CONFIG_MEM_ENCRYPTION
+    DEFINE_PROP_BOOL("sme", X86CPU, sme, false),
+    DEFINE_PROP_UINT32("sme-c-bit", X86CPU, sme_c_bit, 47),
+#endif
 
     DEFINE_PROP_UINT32("hv-spinlocks", X86CPU, hyperv_spinlock_attempts,
                        HYPERV_SPINLOCK_NEVER_NOTIFY),
